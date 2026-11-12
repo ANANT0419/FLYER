@@ -4,6 +4,7 @@
 import { Peer } from 'peerjs';
 import { joinRelay } from './relay.js';
 import { rtcAnswer } from './rtc.js';
+import { makeClock, clockPong, predict } from './predict.js';
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const load = (k, d) => { try { const v = JSON.parse(localStorage.getItem('flyer.' + k)); return v == null ? d : v; } catch (_) { return d; } };
@@ -33,23 +34,33 @@ function onData(d, viaRelay) {
   if (viaRelay && d.rtc === 'offer') {   // the phone offers our own direct link through the relay
     if (answerer) answerer.close();
     rtcAnswer(d.sdp, m => relay && relay.send(m), m => onData(m, false),
-      ch => { dch = ch; phone.status = 'connected'; phone.via = 'direct'; phone.ms = 0; },
+      ch => { dch = ch; phone.status = 'connected'; phone.via = 'direct'; phone.ms = 0; pings = 0; },
       ch => { if (dch === ch) dch = null; }).then(a => { answerer = a; }).catch(() => {});
     if (!relayAcked && relay) { relayAcked = true; relay.send({ k: 1 }); }
     return;
   }
   if (viaRelay) { if (!relayAcked && relay) { relayAcked = true; relay.send({ k: 1 }); } if (phone.status === 'waiting' || phone.status === 'starting') phone.status = 'connected'; phone.via = directOpen() ? 'direct' : 'relay'; }
   if (Array.isArray(d)) {
-    const t = performance.now(), p = +d[0] || 0, r = +d[1] || 0, gap = Math.max(0.008, (t - lastMsg) / 1000);
-    // how fast the tilt is changing, so the screen can run slightly ahead between messages instead of trailing them
-    if (lastMsg && gap < 0.35) { vp += ((p - phone.pitch) / gap - vp) * 0.5; vr += ((r - phone.roll) / gap - vr) * 0.5; } else { vp = vr = 0; }
-    phone.pitch = p; phone.roll = r; lastMsg = t; phone.via = directOpen() ? 'direct' : 'relay';
+    const t = performance.now(), p = +d[0] || 0, r = +d[1] || 0;
+    if (d.length >= 5) {   // new phones: [pitch, roll, pitch rate, roll rate, phone time of the reading]
+      const tp = +d[4];
+      if (tp <= lastPhoneT && tp > lastPhoneT - 5000) return;   // an older reading overtaken by a newer one: ignore it
+      if (tp < lastPhoneT - 5000) clock.ok = false;              // the phone page reloaded: its clock restarted
+      lastPhoneT = tp; st.vp = +d[2] || 0; st.vr = +d[3] || 0;
+      st.at = clock.ok ? Math.min(t, tp - clock.off) : t - (phone.ms || 15);
+    } else {   // an older phone page still open: estimate the rate from successive readings
+      const gap = Math.max(0.008, (t - lastMsg) / 1000);
+      if (lastMsg && gap < 0.35) { st.vp += ((p - st.p) / gap - st.vp) * 0.5; st.vr += ((r - st.r) / gap - st.vr) * 0.5; } else st.vp = st.vr = 0;
+      st.at = t - (phone.ms || 15);
+    }
+    st.p = p; st.r = r; phone.pitch = p; phone.roll = r; lastMsg = t; phone.via = directOpen() ? 'direct' : 'relay';
   }
-  else if (d.q) { const rtt = performance.now() - d.q; if (rtt >= 0 && rtt < 5000) phone.ms = phone.ms ? phone.ms * 0.7 + rtt / 2 * 0.3 : rtt / 2; }
+  else if (d.q) { const now = performance.now(), rtt = now - d.q; if (rtt >= 0 && rtt < 5000) phone.ms = phone.ms ? phone.ms * 0.7 + rtt / 2 * 0.3 : rtt / 2; if (d.t != null) clockPong(clock, d.q, +d.t, now); pings++; }
   else if (d.h && relay) relay.send({ k: 1 });
   else if (d.b) for (const cb of boostCbs) { try { cb(); } catch (_) {} }
 }
-let peer = null, conn = null, lastMsg = 0, sp = 0, sr = 0, lastT = 0, vp = 0, vr = 0, lastPing = 0;
+let peer = null, conn = null, lastMsg = 0, sp = 0, sr = 0, lastT = 0, lastPing = 0, lastPhoneT = -1e12, pings = 0;
+const st = { p: 0, r: 0, vp: 0, vr: 0, at: 0 }, clock = makeClock();
 const boostCbs = [];
 export function onPhoneBoost(cb) { boostCbs.push(cb); }
 export function setPhoneSens(v) { phone.sens = clamp(+v || 1, 0.6, 1.6); save('padSens', phone.sens); }
@@ -77,7 +88,7 @@ function startPeer(code) {
   peer.on('connection', c => {
     if (conn && conn.open) try { conn.close(); } catch (_) {}
     conn = c;
-    c.on('open', () => { phone.status = 'connected'; phone.via = 'direct'; });
+    c.on('open', () => { phone.status = 'connected'; phone.via = 'direct'; pings = 0; });
     c.on('data', d => onData(d, false));
     c.on('close', () => { if (conn === c) { conn = null; if (phone.status === 'connected' && !relayAcked) phone.status = 'waiting'; } });
   });
@@ -89,19 +100,24 @@ function startPeer(code) {
     phone.status = 'error'; phone.error = 'Could not set up the phone link (' + (e && e.type ? e.type : e) + '). Check the internet connection and try again.';
   });
 }
-export function stopPhone() { keepCode(''); if (answerer) answerer.close(); answerer = null; dch = null; try { if (peer) peer.destroy(); } catch (_) {} if (relay) relay.close(); relay = null; relayAcked = false; phone.code = ''; peer = null; conn = null; phone.status = 'off'; phone.ms = 0; phone.via = ''; phone.live = false; phone.L = phone.R = 0; }
+export function stopPhone() { keepCode(''); if (answerer) answerer.close(); answerer = null; dch = null; try { if (peer) peer.destroy(); } catch (_) {} if (relay) relay.close(); relay = null; relayAcked = false; phone.code = ''; peer = null; conn = null; phone.status = 'off'; phone.ms = 0; phone.via = ''; phone.live = false; clock.ok = false; pings = 0; lastPhoneT = -1e12; phone.L = phone.R = 0; }
 
 /** Call once per frame. */
 export function updatePhone(now) {
   const dt = Math.min(0.1, lastT ? (now - lastT) / 1000 : 0.016); lastT = now;
   phone.live = phone.status === 'connected' && now - lastMsg < 600;
-  if (phone.status === 'connected' && now - lastPing > (phone.via === 'relay' ? 3000 : 1000)) { lastPing = now; toPhone({ p: now }); }   // measures the delay, shown on the setup screen
-  // aim a little ahead along the current motion (at most 50 ms), then glide there: hides the gaps between messages without trailing them
-  const age = Math.min(phone.via === 'relay' ? 0.08 : 0.05, (now - lastMsg) / 1000), lead = phone.live ? 1 : 0;
-  const tp = phone.live ? phone.pitch + vp * age * lead : 0, tr = phone.live ? phone.roll + vr * age * lead : 0;
-  const g = 1 - Math.exp(-dt * (phone.live ? 55 : 6));   // ease to level if the messages stop
+  // ping often at first (to learn how the two clocks differ), then now and then to keep the delay figure fresh
+  if (phone.status === 'connected' && now - lastPing > (pings < 8 ? 250 : phone.via === 'relay' ? 3000 : 1000)) { lastPing = now; toPhone({ p: now }); }
+  // Draw where the phone is now, not where it was: carry the last reading forward by its age plus the time until this
+  // frame is on the display (~20 ms) and the game's own smoothing (~30 ms), using how fast the phone was turning.
+  const relay = phone.via === 'relay';
+  const [tp, tr] = phone.live ? predict(st, now, 20 + 1000 / 60 + 1000 / 70, relay ? 260 : 160, relay ? 25 : 18) : [0, 0];
+  phone.lead = phone.live ? Math.round(Math.min(relay ? 260 : 160, now - st.at + 50)) : 0;
+  const g = 1 - Math.exp(-dt * (phone.live ? 60 : 6));   // ease to level if the messages stop
   sp += (tp - sp) * g; sr += (tr - sr) * g;
   const p = shape(sp * phone.sens, PITCH_DEAD, PITCH_FULL), t = shape(-sr * phone.sens, ROLL_DEAD, ROLL_FULL);   // t + = turn left
   phone.L = phone.live ? clamp(p + t, -1, 1) : 0; phone.R = phone.live ? clamp(p - t, -1, 1) : 0;
   phone.sp = sp; phone.sr = sr;
 }
+// ?debug exposes the link's inner state for test/phone-e2e.cjs
+if (/[?&]debug\b/.test(location.search)) window.__pad = { phone, st, clock, predict, updatePhone };

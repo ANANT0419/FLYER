@@ -3,6 +3,7 @@ import { Peer } from 'peerjs';
 import { peerOptions, padId } from './link.js';
 import { joinRelay } from './relay.js';
 import { rtcOffer } from './rtc.js';
+import { makeRate, rateStep } from './predict.js';
 
 export function startPad(code) {
   document.title = 'Flyer glider';
@@ -20,7 +21,8 @@ export function startPad(code) {
   </main>`;
   const $ = id => document.getElementById(id);
   let peer = null, conn = null, b0 = null, g0 = null, beta = 0, gamma = 0, curP = 0, curR = 0, started = false, wake = null, gotSensor = false;
-  let relay = null, relayUp = false, dch = null, offer = null, rtcT = 0;
+  let relay = null, relayUp = false, dch = null, offer = null, rtcT = 0, gyro = null, curT = 0, curV = [0, 0];
+  const rate = makeRate();
   // two ways to the screen directly: the PeerJS link (conn) or our own link built through the relay (dch). Either is fast.
   const directOpen = () => (conn && conn.open) || (dch && dch.readyState === 'open');
   const dsend = d => { try { if (conn && conn.open) conn.send(d); else dch.send(JSON.stringify(d)); } catch (_) {} };
@@ -45,7 +47,8 @@ export function startPad(code) {
     // flat on the palm: beta is nose up/down, gamma is the roll. Past ~60 degrees the two start to blend, which is beyond any flying tilt.
     const p = Math.max(-80, Math.min(80, beta - b0)), r = Math.max(-80, Math.min(80, gamma - g0));
     $('padWing').style.transform = `translateY(${(-p * 1.6).toFixed(1)}px) rotate(${r.toFixed(1)}deg)`;
-    curP = p; curR = r;
+    curP = p; curR = r; curT = performance.now();
+    curV = rateStep(rate, curT, [p, r], gyro);   // how fast it is tilting, so the big screen can predict past the delay
     sendTilt(false);   // send the moment the sensor reports, rather than waiting for the next beat
   }
   // the direct link gets every sensor reading (up to ~100 a second). The relay shares a message limit with everyone
@@ -55,12 +58,12 @@ export function startPad(code) {
     if (!gotSensor) return; const t = performance.now(), direct = directOpen();
     if (direct) { if (t - lastSent < 8 || (beatTick && t - lastSent < 40)) return; }
     else { const moved = Math.abs(curP - sentP) > 0.4 || Math.abs(curR - sentR) > 0.4; if (t - lastSent < 33 || (!moved && t - lastSent < 300)) return; }
-    const m = [+curP.toFixed(2), +curR.toFixed(2)]; lastSent = t; sentP = curP; sentR = curR;
+    const m = [+curP.toFixed(2), +curR.toFixed(2), Math.round(curV[0]), Math.round(curV[1]), Math.round(curT * 10) / 10]; lastSent = t; sentP = curP; sentR = curR;
     if (direct) dsend(m); else if (relayUp) relay.send(m);
   }
   // and a steady beat, so the big screen knows the phone is there even when it is held perfectly still
   setInterval(() => sendTilt(true), 50);
-  const echo = d => { if (d && d.p) send({ q: d.p }); };
+  const echo = d => { if (d && d.p) send({ q: d.p, t: Math.round(performance.now() * 10) / 10 }); };   // our clock too, so the screen can date each reading
   function connect(quiet) {
     if (!quiet || !relayUp) stat('Connecting…');
     try { if (peer) peer.destroy(); } catch (_) {}
@@ -87,9 +90,13 @@ export function startPad(code) {
     if (!started) {
       let refused = false;
       try {   // iPhones ask before a page may read motion sensors, and only from a tap
-        if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') refused = (await DeviceOrientationEvent.requestPermission()) !== 'granted';
+        // ask for both in the same tap (on iPhones they are one permission; the gyroscope is the motion half)
+        const asks = [typeof DeviceOrientationEvent !== 'undefined' ? DeviceOrientationEvent : null, typeof DeviceMotionEvent !== 'undefined' ? DeviceMotionEvent : null].map(E => E && typeof E.requestPermission === 'function' ? E.requestPermission().catch(() => 'denied') : null);
+        if (asks[0]) refused = (await asks[0]) !== 'granted';
       } catch (_) { refused = true; }
       window.addEventListener('deviceorientation', onTilt);
+      // the gyroscope: rotation speed around the phone's side-to-side axis (nose up/down) and its long axis (roll)
+      window.addEventListener('devicemotion', e => { const q = e.rotationRate; gyro = q && q.beta != null && q.gamma != null ? [q.beta, q.gamma] : null; });
       started = true;
       // only complain if no tilt actually arrives: some browsers answer the question oddly but still deliver the data
       setTimeout(() => { if (!gotSensor) $('padHint').textContent = refused ? 'Motion access was refused. Allow motion sensors for this site in the browser settings, then reload.' : 'This device is not reporting any tilt. Phone glider needs a phone with motion sensors.'; }, 2500);

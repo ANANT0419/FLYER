@@ -847,8 +847,9 @@ function update(dt){
   if(G.rescueT>0){G.rescueT-=dt;if(G.rescueT<=0)finishRescue();return;}
   if(G.crashT>0){G.crashT-=dt;if(G.crashT<=0){placeAt(Math.max(30,G.s-50),46);G.speed=62;G.invuln=1.6;}return;}
   // Tilt controls (phone, camera) are position controls: the glider should match your hand at once, so they skip the
-  // "heavy plane" easing that gives keys and mouse their weight. ~70 ms to settle instead of ~300 ms.
-  const direct=settings.control==='phone'||settings.control==='camera',kA=direct?30:10,kP=direct?14:3.2,kR=direct?14:4.2;G.direct=direct;
+  // "heavy plane" easing that gives keys and mouse their weight. Phone: ~15 ms (its readings are clean and the screen
+  // already predicts past the delay, link.js); camera: ~70 ms (hand tracking is noisier); keys and mouse ~300 ms.
+  const direct=settings.control==='phone'||settings.control==='camera',ph=settings.control==='phone',kA=direct?30:10,kP=ph?70:direct?14:3.2,kR=ph?70:direct?14:4.2;G.direct=direct;
   const inp=readInput(dt);G.armL+=(inp.L-G.armL)*(1-Math.exp(-dt*kA));G.armR+=(inp.R-G.armR)*(1-Math.exp(-dt*kA));
   let pitchIn=(inp.L+inp.R)/2;if(settings.invert)pitchIn=-pitchIn;const turnIn=(inp.L-inp.R)/2;G.pitchIn=pitchIn;G.turnIn=turnIn;
   // where is the current?
@@ -1252,7 +1253,7 @@ function phoneHud(now){
     if(phone.live){const sp=phone.sp||0,sr=phone.sr||0;if(sp>9)pk.Up=true;if(sp<-9)pk.Down=true;if(sr<-11)pk.Left=true;if(sr>11)pk.Right=true;}
     for(const k in pk)$('pk'+k).classList.toggle('ok',pk[k]);
     if(phone.status==='connected'){const ms=Math.round(phone.ms||0),relay=phone.via==='relay';
-      $('padLink').textContent=(relay?'Linked through the relay (slower). Put both devices on the same Wi‑Fi for the direct link.':'Linked directly.')+(ms?' Delay about '+ms+' ms'+(ms>60?' — that is high; the same Wi‑Fi, closer to the router, helps.':'.'):'');}
+      $('padLink').textContent=(relay?'Linked through the relay (slower). Put both devices on the same Wi‑Fi for the direct link.':'Linked directly.')+(ms?' Network delay about '+ms+' ms'+(ms>60?' — that is high; the same Wi‑Fi, closer to the router, helps.':', and the screen predicts past it, so the glider moves with your hand.'):'');}
   }
   {const slow=settings.control==='phone'&&(G.state==='play'||G.state==='count')&&phone.status==='connected'&&phone.via==='relay';$('linkChip').hidden=!slow;
    if(slow)$('linkChip').textContent='PHONE ON SLOW LINK'+(phone.ms?' · '+Math.round(phone.ms)+' MS':'')+' · SAME WI‑FI FIXES IT';}
