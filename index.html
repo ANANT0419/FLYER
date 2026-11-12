@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#191d2e">
+<title>Flyer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&display=swap">
+  <script type="module" crossorigin src="./assets/index-C3_4tgpW.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-D3--7S4V.css">
+</head>
+<body>
+<canvas id="c" tabindex="0" aria-label="Flyer flight view"></canvas>
+<div class="flash" id="flash"></div>
+<div class="fadeB" id="fadeB"></div>
+<div class="oob" id="oob" hidden></div>
+
+<div class="hud" id="hud" hidden>
+  <div class="top">
+    <div class="scorebox">
+      <div class="score" id="score">0</div>
+      <div class="subrow">
+        <span class="chip mult" id="mult">x1</span>
+        <span id="gemcount">0 gems</span>
+        <span class="chip cur" id="curChip" hidden>IN THE CURRENT</span>
+        <span class="chip skim" id="thermChip" hidden>UPDRAFT</span>
+        <span class="chip skim" id="skim" hidden>SKIMMING</span>
+      </div>
+    </div>
+    <div class="progress">
+      <div class="bar"><div class="fill" id="prog"></div></div>
+      <div class="lbl"><span id="trackName">Saffron Gorge</span><span id="dist">0 m</span></div>
+    </div>
+    <div class="btns">
+      <button class="iconbtn txt" id="viewBtn" aria-label="Switch camera view">FPP</button>
+      <button class="iconbtn" id="muteBtn" aria-label="Mute sound">♪</button>
+      <button class="iconbtn" id="pauseBtn" aria-label="Pause">II</button>
+    </div>
+  </div>
+  <div class="gauge">
+    <div class="speed"><span id="speed">0</span><small>KM/H</small></div>
+    <div class="boost"><div class="fill" id="boostFill"></div><div class="ticks"></div></div>
+    <div class="boostlbl" id="boostLbl">Boost</div>
+  </div>
+</div>
+
+<div class="coach" id="coach" hidden>
+  <div class="meta"><span class="step" id="cStep">Lesson 1 of 10</span><button class="skip" id="cSkip">Skip lesson</button></div>
+  <div class="txt">
+    <h3 id="cTitle">Get a grip</h3>
+    <p id="cBody"></p>
+    <p class="alt" id="cAlt"></p>
+    <div class="cbar"><div class="cfill" id="cFill"></div></div>
+  </div>
+  <div class="pads" aria-hidden="true">
+    <div class="padcol"><div class="pad" id="padL"><div class="zone"></div><div class="ghost"></div><div class="live"></div></div><span class="padkey" id="padLk">LEFT</span></div>
+    <div class="padcol"><div class="pad" id="padR"><div class="zone"></div><div class="ghost"></div><div class="live"></div></div><span class="padkey" id="padRk">RIGHT</span></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<div class="thumb" id="thumbL"><span class="tag">LEFT ARM</span><div class="knob"></div></div>
+<div class="thumb" id="thumbR"><span class="tag">RIGHT ARM</span><div class="knob"></div></div>
+
+<div class="overlay" id="startScreen">
+  <div class="card">
+    <div class="eyebrow" id="trackEyebrow">Saffron Gorge</div>
+    <h1>Flyer</h1>
+    <p class="lede">Leap off the ridge in your wingsuit and glide one long canyon at dusk. Ride the glowing wind current, gather gems, thread the gold rings, and reach the gate at the bottom.</p>
+    <div class="tracks" role="group" aria-label="Choose a track">
+      <button class="trackcard" data-track="gorge" aria-pressed="true"><span class="tn">Saffron Gorge</span><span class="td">The classic glide down the canyon, gathering gems along the current.</span></button>
+      <button class="trackcard" data-track="coaster" aria-pressed="false"><span class="tn">Skyline Coaster</span><span class="td">Ride a rail of wind through big drops and soaring climbs.</span></button>
+    </div>
+    <div class="ctlpick" role="group" aria-label="Choose your controls">
+      <button class="ctlcard" data-ctl="simple"><span class="tn">Arrow keys</span><span class="td">↑ climb, ↓ dive, ← → turn. The easiest start.</span></button>
+      <button class="ctlcard" data-ctl="mouse"><span class="tn">Mouse</span><span class="td">Hold and drag to steer.</span></button>
+      <button class="ctlcard" data-ctl="arms"><span class="tn">Two arms</span><span class="td">W/S and ↑/↓ move one arm each. Most control.</span></button>
+      <button class="ctlcard" data-ctl="touch"><span class="tn">Touch</span><span class="td">Thumbs on the screen.</span></button>
+      <button class="ctlcard cam" data-ctl="camera"><span class="tn">Camera <span class="badge new">New</span></span><span class="td">Your hand is the glider. No keys at all.</span></button>
+    </div>
+    <div class="small" id="ctlHelp"></div>
+    <div class="choices">
+      <button class="choice" id="tutBtn"><span class="badge" id="tutBadge">Recommended first</span><strong>Learn to fly</strong><span>A short guided lesson: dive, climb, turn, ride the current, boost.</span></button>
+      <button class="choice" id="startBtn"><strong>Glide the gorge</strong><span>The full run. About a minute and a half of flying.</span></button>
+    </div>
+    <div class="settings">
+      <span id="modeRow" class="rowinline"><span class="small">Thumbs</span><span class="seg" id="modeSeg" role="group" aria-label="Touch controls">
+        <button data-mode="two" aria-pressed="true">Two thumbs</button><button data-mode="one" aria-pressed="false">One thumb</button>
+      </span></span>
+      <label><input type="checkbox" id="fppBox"> First-person view</label>
+      <label><input type="checkbox" id="invertPitch"> Invert climb / dive</label>
+      <label>Sensitivity <input type="range" id="sens" min="0.6" max="1.6" step="0.05" value="1"></label>
+    </div>
+    <div class="small" id="ctlNote"></div>
+  </div>
+</div>
+
+<div class="overlay" id="pauseScreen" hidden>
+  <div class="card">
+    <div class="eyebrow">Paused</div>
+    <h2>Catch your breath</h2>
+    <p class="small" id="pauseNote"></p>
+    <div class="settings">
+      <label><input type="checkbox" id="invertPitch2"> Invert climb / dive</label>
+      <label>Sensitivity <input type="range" id="sens2" min="0.6" max="1.6" step="0.05" value="1"></label>
+    </div>
+    <div class="actions">
+      <button class="primary-btn" id="resumeBtn">Resume</button>
+      <button class="secondary" id="restartBtn">Restart</button>
+      <button class="secondary" id="menuBtn">Main menu</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="tutDone" hidden>
+  <div class="card">
+    <div class="eyebrow">Lessons complete</div>
+    <h2>You're ready to glide</h2>
+    <p class="lede">You have every move you need. The glowing current always shows the best line through the gorge.</p>
+    <div class="actions">
+      <button class="primary-btn" id="tdGo">Glide the gorge</button>
+      <button class="secondary" id="tdAgain">Practice again</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="endScreen" hidden>
+  <div class="card">
+    <div class="eyebrow">Gate reached</div>
+    <h2 id="endTitle">Clean run</h2>
+    <div class="stats">
+      <div class="stat"><span>Score</span><strong id="eScore">0</strong></div>
+      <div class="stat"><span>Gems</span><strong id="eGems">0</strong></div>
+      <div class="stat"><span>Rings</span><strong id="eRings">0</strong></div>
+      <div class="stat"><span>Time</span><strong id="eTime">0:00</strong></div>
+      <div class="stat"><span>Bumps</span><strong id="eCrash">0</strong></div>
+      <div class="stat"><span>Best</span><strong id="eBest">0</strong></div>
+    </div>
+    <div class="newbest" id="newBest" hidden>New best score on this device.</div>
+    <div class="actions">
+      <button class="primary-btn" id="againBtn">Fly again</button>
+      <button class="secondary" id="endMenuBtn">Main menu</button>
+    </div>
+  </div>
+</div>
+
+<button class="issuebtn" id="issueBtn" aria-expanded="false">Issue log (0)</button>
+<div class="issues" id="issuePanel" hidden>
+  <header><h4>Issue log</h4><button class="iconbtn" id="issueClose" aria-label="Close issue log" style="width:30px;height:30px;border-radius:8px">×</button></header>
+  <div class="list" id="issueList"></div>
+  <div class="row"><button id="issueCopy">Copy all</button><button id="issueClear">Clear</button></div>
+</div>
+<div class="overlay" id="camSetup" hidden>
+  <div class="card camcard">
+    <div class="eyebrow">Camera control</div>
+    <h2>Your hand is the glider</h2>
+    <div class="camgrid">
+      <canvas id="camSetupView" class="camview" aria-label="Camera view with your tracked hand"></canvas>
+      <div class="camside">
+        <p class="lede" id="camMsg"></p>
+        <ul class="camlist">
+          <li id="ckUp">Fingertips up <span>climb</span></li>
+          <li id="ckDown">Fingertips down <span>dive</span></li>
+          <li id="ckLeft">Tilt left <span>turn left</span></li>
+          <li id="ckRight">Tilt right <span>turn right</span></li>
+          <li id="ckFist">Close a fist <span>boost</span></li>
+        </ul>
+        <p class="small" id="camSide"></p>
+        <p class="small">Use either hand and swap whenever you like. The video is processed on this device and never leaves it.</p>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="primary-btn" id="camDone" disabled>Use camera control</button>
+      <button class="secondary" id="camRecalBtn">Set level again</button>
+      <button class="secondary" id="camCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+<div class="camhud" id="camHud" hidden><canvas id="camHudView" class="camview"></canvas></div>
+
+</body>
+</html>
