@@ -9,7 +9,7 @@ export async function rtClient() {
   if (!rtReady) return null;
   if (!client) {
     const { createClient } = await import('@supabase/supabase-js');
-    client = createClient(RELAY_URL, RELAY_KEY, { auth: { persistSession: false }, realtime: { params: { eventsPerSecond: 25 } } });
+    client = createClient(RELAY_URL, RELAY_KEY, { auth: { persistSession: false }, realtime: { params: { eventsPerSecond: 60 } } });
   }
   return client;
 }

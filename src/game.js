@@ -180,7 +180,7 @@ vec3 col=mix(vec3(0.64,0.39,0.33),vec3(0.86,0.6,0.45),strata);col=mix(col,vec3(0
 
 /* ================= terrain (procedural detail per pixel) ================= */
 (function(){
-  const ROWSTEP=isTouch?3:2,rows=Math.floor((S-1)/ROWSTEP)+1,cols=isTouch?61:97,EXT=RACE?300:340;
+  const ROWSTEP=isTouch?3:2,rows=Math.floor((S-1)/ROWSTEP)+1,cols=isTouch?57:81,EXT=RACE?300:340;
   const pos=new Float32Array(rows*cols*3),aH=new Float32Array(rows*cols),aAd=new Float32Array(rows*cols);let p=0,q=0;
   for(let r=0;r<rows;r++){const i=Math.min(S-1,r*ROWSTEP),s=i*STEP,fy=C[i].y-FLOOR;
     for(let j=0;j<cols;j++){const t=j/(cols-1)*2-1,d=Math.sign(t)*Math.pow(Math.abs(t),1.35)*EXT,h=relH(s,d);
@@ -200,7 +200,7 @@ vec3 rA=vec3(0.66,0.40,0.34),rB=vec3(0.87,0.61,0.45),rD=vec3(0.42,0.27,0.30);
 float rg=vnoise(vec2(vW.x+vW.z,vW.y*1.6)*0.22);float strata=0.5+0.5*sin(vW.y*0.16+n1*4.0+rg*1.5);
 vec3 rock=mix(rA,rB,strata);rock=mix(rock,rD,smoothstep(0.55,0.85,n2)*0.5);rock*=0.86+0.22*rg;
 float streak=vnoise(vec2((vW.x-vW.z)*0.22,vW.y*0.012));rock*=1.0-0.28*smoothstep(0.55,0.85,streak)*slope;          // dark water streaks down the faces
-float crack=1.0-abs(vnoise(vec2((vW.x+vW.z)*0.035,vW.y*0.3))*2.0-1.0);rock*=1.0-0.2*smoothstep(0.9,0.98,crack)*slope; // cracks between the strata
+ // cracks between the strata
 rock=mix(rock,vec3(0.93,0.74,0.56),smoothstep(0.35,0.08,slope)*0.25);                                                     // sunlit ledges
 grass=mix(grass,gDark*1.05,smoothstep(10.0,70.0,vH)*0.45);
 float rockMix=clamp(smoothstep(0.5,0.8,slope+(n2-0.5)*0.3)+smoothstep(95.0,150.0,vH)*0.75,0.0,1.0);
@@ -225,7 +225,16 @@ diffuseColor.rgb=col;`);};
      fp[k*3]=x;fp[k*3+1]=fy+hh;fp[k*3+2]=z;fh[k]=hh*0.5;fd[k]=dist;k++;}   // half height for the colouring: snow only on the high peaks
    const fi=[];for(let iz=0;iz<nzc-1;iz++)for(let ix=0;ix<nx-1;ix++){const a=iz*nx+ix,b=a+1,c=a+nx,d=c+1;fi.push(a,b,c,b,d,c);}
    const fg=new THREE.BufferGeometry();fg.setAttribute('position',new THREE.BufferAttribute(fp,3));fg.setAttribute('aH',new THREE.BufferAttribute(fh,1));fg.setAttribute('aAd',new THREE.BufferAttribute(fd,1));
-   fg.setIndex(fi);fg.computeVertexNormals();const fm=new THREE.Mesh(fg,mat);fm.frustumCulled=false;scene.add(fm);}
+   fg.setIndex(fi);fg.computeVertexNormals();
+   // painted once, per corner, so these distant slopes cost almost nothing to draw (they cover much of the screen)
+   const nrm=fg.attributes.normal.array,fc=new Float32Array(fh.length*3),cc=new THREE.Color(),rockA=new THREE.Color(0.62,0.4,0.36),rockB=new THREE.Color(0.8,0.58,0.46),grassC=new THREE.Color(0.36,0.5,0.3),snowC=new THREE.Color(0.95,0.93,0.92);
+   for(let i=0;i<fh.length;i++){const h=fh[i]*2,ny=nrm[i*3+1],sl=1-ny,x=fp[i*3],z=fp[i*3+2];
+     cc.copy(rockA).lerp(rockB,0.5+0.5*Math.sin(h*0.035+vn(x*0.01,z*0.01)*3));
+     cc.lerp(grassC,clamp((0.32-sl)/0.2,0,1)*clamp((520-h)/200,0,1));
+     cc.lerp(snowC,clamp((h-430-vn(x*0.004,z*0.004)*120)/90,0,1)*clamp((0.5-sl)/0.25,0,1));
+     fc[i*3]=cc.r;fc[i*3+1]=cc.g;fc[i*3+2]=cc.b;}
+   fg.setAttribute('color',new THREE.BufferAttribute(fc,3));fg.deleteAttribute('aH');fg.deleteAttribute('aAd');
+   const fm=new THREE.Mesh(fg,new THREE.MeshLambertMaterial({vertexColors:true}));fm.frustumCulled=false;scene.add(fm);}
   // river with moving light
   const wr=Math.floor((S-1)/2)+1,wp=new Float32Array(wr*2*3),wu=new Float32Array(wr*2*2);
   for(let r=0;r<wr;r++){const i=Math.min(S-1,r*2),fy=C[i].y-FLOOR-3.2;for(let k=0;k<2;k++){const d=k?22:-22,o=(r*2+k)*3;wp[o]=C[i].x+R[i].x*d;wp[o+1]=fy;wp[o+2]=C[i].z+R[i].z*d;wu[(r*2+k)*2]=k;wu[(r*2+k)*2+1]=i*STEP;}}
@@ -1281,12 +1290,22 @@ if(settings.control==='phone'&&phoneWasPaired())hostPhone();
 syncControlUI();
 
 /* ================= loop ================= */
-let last=performance.now(),fpsF=0,fpsT=0,lowCount=0,lowered=false;
+let last=performance.now(),fpsF=0,fpsT=0,lowCount=0;
+// Quality ladder: when play drops under ~50 fps for 2 seconds, take one step down. Smoothness comes before looks.
+const QSTEPS=[
+  ()=>post.level>1&&(post.setLevel(1),'switched off the brushwork filter'),
+  ()=>pixelRatio>1.25&&(pixelRatio=1.25,renderer.setPixelRatio(1.25),resize(),'lowered the resolution a little'),
+  ()=>pixelRatio>1&&(pixelRatio=1,renderer.setPixelRatio(1),resize(),'lowered the resolution'),
+  ()=>post.level>0&&(post.setLevel(0),'switched off bloom and colour grading'),
+  ()=>pixelRatio>0.8&&(pixelRatio=0.8,renderer.setPixelRatio(0.8),resize(),'lowered the resolution further'),
+];
+function stepQuality(fps){for(const st of QSTEPS){const what=st();if(what){logIssue('Performance','Frame rate dropped to '+Math.round(fps)+' fps, so I '+what+' to keep play smooth.');return true;}}return false;}
 function loop(now){requestAnimationFrame(loop);let dt=(now-last)/1000;last=now;if(dt>0.05)dt=0.05;if(dt<=0)dt=0.016;timeU.value=now/1000;
   try{if(G.state==='play'){update(dt);updateHUD();if(G.mode==='tut')tutPads();}else $('oob').hidden=true;
     updateCamera(dt,false);updateVisuals(dt,now/1000);drawThumbs();updateHand(now);handHud(now);updatePhone(now);phoneHud(now);updateRaceNet(now);post.render(now/1000,G.state==='play'?clamp((G.speed-70)/100,0,1):0);}
   catch(e){logIssue('Frame',e.message+(e.stack?' | '+String(e.stack).split('\n')[1]:''));}
-  fpsF++;fpsT+=dt;if(fpsT>=2){const fps=fpsF/fpsT;fpsF=0;fpsT=0;
-    if(G.state==='play'&&fps<26){lowCount++;if(lowCount>=2&&post.level>1){post.setLevel(1);lowCount=0;logIssue('Performance','Low frame rate ('+Math.round(fps)+' fps). Switched off the brushwork filter to keep play smooth.');}else if(lowCount>=2&&!lowered){lowered=true;pixelRatio=1;renderer.setPixelRatio(1);resize();logIssue('Performance','Low frame rate ('+Math.round(fps)+' fps). Lowered render resolution to keep play smooth.');}}else lowCount=0;}}
+  fpsF++;fpsT+=dt;if(fpsT>=1){const fps=fpsF/fpsT;fpsF=0;fpsT=0;
+    if(G.state==='play'&&fps<50){lowCount++;if(lowCount>=2&&stepQuality(fps))lowCount=0;}else lowCount=0;
+  }}
 resize();placeAt(30,48);updateCamera(0,true);requestAnimationFrame(loop);
 })();

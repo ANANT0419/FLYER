@@ -3,6 +3,7 @@
 // to each other (WebRTC); a public PeerJS server is used only to introduce them.
 import { Peer } from 'peerjs';
 import { joinRelay } from './relay.js';
+import { rtcAnswer } from './rtc.js';
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const load = (k, d) => { try { const v = JSON.parse(localStorage.getItem('flyer.' + k)); return v == null ? d : v; } catch (_) { return d; } };
@@ -25,15 +26,24 @@ export const phone = {
   L: 0, R: 0,           // arm values for the game
   sens: load('padSens', 1),
 };
-let relay = null, relayAcked = false;
+let relay = null, relayAcked = false, dch = null, answerer = null;
+const directOpen = () => (conn && conn.open) || (dch && dch.readyState === 'open');
 function onData(d, viaRelay) {
   if (!d) return;
-  if (viaRelay) { if (!relayAcked && relay) { relayAcked = true; relay.send({ k: 1 }); } if (phone.status === 'waiting' || phone.status === 'starting') phone.status = 'connected'; phone.via = conn && conn.open ? 'direct' : 'relay'; }
+  if (viaRelay && d.rtc === 'offer') {   // the phone offers our own direct link through the relay
+    if (answerer) answerer.close();
+    rtcAnswer(d.sdp, m => relay && relay.send(m), m => onData(m, false),
+      ch => { dch = ch; phone.status = 'connected'; phone.via = 'direct'; phone.ms = 0; },
+      ch => { if (dch === ch) dch = null; }).then(a => { answerer = a; }).catch(() => {});
+    if (!relayAcked && relay) { relayAcked = true; relay.send({ k: 1 }); }
+    return;
+  }
+  if (viaRelay) { if (!relayAcked && relay) { relayAcked = true; relay.send({ k: 1 }); } if (phone.status === 'waiting' || phone.status === 'starting') phone.status = 'connected'; phone.via = directOpen() ? 'direct' : 'relay'; }
   if (Array.isArray(d)) {
     const t = performance.now(), p = +d[0] || 0, r = +d[1] || 0, gap = Math.max(0.008, (t - lastMsg) / 1000);
     // how fast the tilt is changing, so the screen can run slightly ahead between messages instead of trailing them
     if (lastMsg && gap < 0.35) { vp += ((p - phone.pitch) / gap - vp) * 0.5; vr += ((r - phone.roll) / gap - vr) * 0.5; } else { vp = vr = 0; }
-    phone.pitch = p; phone.roll = r; lastMsg = t; phone.via = conn && conn.open ? 'direct' : 'relay';
+    phone.pitch = p; phone.roll = r; lastMsg = t; phone.via = directOpen() ? 'direct' : 'relay';
   }
   else if (d.q) { const rtt = performance.now() - d.q; if (rtt >= 0 && rtt < 5000) phone.ms = phone.ms ? phone.ms * 0.7 + rtt / 2 * 0.3 : rtt / 2; }
   else if (d.h && relay) relay.send({ k: 1 });
@@ -43,7 +53,7 @@ let peer = null, conn = null, lastMsg = 0, sp = 0, sr = 0, lastT = 0, vp = 0, vr
 const boostCbs = [];
 export function onPhoneBoost(cb) { boostCbs.push(cb); }
 export function setPhoneSens(v) { phone.sens = clamp(+v || 1, 0.6, 1.6); save('padSens', phone.sens); }
-function toPhone(d) { if (conn && conn.open) try { conn.send(d); } catch (_) {} else if (relay && relayAcked) relay.send(d); }
+function toPhone(d) { try { if (conn && conn.open) conn.send(d); else if (dch && dch.readyState === 'open') dch.send(JSON.stringify(d)); else if (relay && relayAcked) relay.send(d); } catch (_) {} }
 export function phoneBuzz(pattern) { toPhone({ v: pattern }); }
 
 // the pairing code survives a reload of this tab (switching to the race canyon reloads), so a paired phone reconnects by itself
@@ -79,7 +89,7 @@ function startPeer(code) {
     phone.status = 'error'; phone.error = 'Could not set up the phone link (' + (e && e.type ? e.type : e) + '). Check the internet connection and try again.';
   });
 }
-export function stopPhone() { keepCode(''); try { if (peer) peer.destroy(); } catch (_) {} if (relay) relay.close(); relay = null; relayAcked = false; phone.code = ''; peer = null; conn = null; phone.status = 'off'; phone.ms = 0; phone.via = ''; phone.live = false; phone.L = phone.R = 0; }
+export function stopPhone() { keepCode(''); if (answerer) answerer.close(); answerer = null; dch = null; try { if (peer) peer.destroy(); } catch (_) {} if (relay) relay.close(); relay = null; relayAcked = false; phone.code = ''; peer = null; conn = null; phone.status = 'off'; phone.ms = 0; phone.via = ''; phone.live = false; phone.L = phone.R = 0; }
 
 /** Call once per frame. */
 export function updatePhone(now) {
