@@ -221,3 +221,4 @@ h2{margin:0;font-size:clamp(26px,5vw,36px);font-weight:800;letter-spacing:-.03em
 @media (max-height:460px){.camlist{font-size:12px;gap:4px}.camlist li{padding:4px 8px 4px 28px}}
 #camSetup{padding-bottom:calc(env(safe-area-inset-bottom,0px) + 58px)}
 .camlist li{padding-left:36px}
+.camsens{display:flex;align-items:center;gap:8px}.camsens input{flex:1;accent-color:var(--gem)}

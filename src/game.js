@@ -1,6 +1,6 @@
 // Flyer: a wingsuit gliding game. Grown from Glidepath v6 (see legacy/).
 import * as THREE from 'three';
-import {hand,enableHand,disableHand,updateHand,onFist,attachCanvas,requestCalibration} from './hand.js';
+import {hand,enableHand,disableHand,updateHand,onFist,attachCanvas,requestCalibration,beginRangeLearning,commitRangeLearning,resetHandRange,setHandSens} from './hand.js';
 import {createPost} from './post.js';
 (function(){
 "use strict";
@@ -706,7 +706,7 @@ function readInput(dt){
   if(mouse){const p=clamp((mouse.y-mouse.y0)/(window.innerHeight*0.2),-1,1),t=clamp(-(mouse.x-mouse.x0)/(window.innerWidth*0.15),-1,1);input.mL=clamp(p+t,-1,1);input.mR=clamp(p-t,-1,1);}
   else{input.mL=ease(input.mL,0,5);input.mR=ease(input.mR,0,5);}
   if(hand.enabled){remote.active=hand.tracking&&hand.calibrated;remote.L=hand.L;remote.R=hand.R;remote.tl=remote.tr=remote.active;if(remote.active&&settings.control==='camera'&&keysDown.size===0&&!mouse&&touches.size===0)noteInput('remote');}else remote.active=false;
-  input.rL=ease(input.rL,remote.active?remote.L:0,14);input.rR=ease(input.rR,remote.active?remote.R:0,14);
+  input.rL=ease(input.rL,remote.active?remote.L:0,20);input.rR=ease(input.rR,remote.active?remote.R:0,20);
   const s=settings.sens;return {L:clamp((input.tL+input.kL+input.mL+input.rL)*s,-1,1),R:clamp((input.tR+input.kR+input.mR+input.rR)*s,-1,1)};
 }
 function drawThumbs(){
@@ -866,7 +866,7 @@ const STEPS=[
     alt:{two:'double-tap',one:'double-tap',keys:'Space',mouse:'double-click'},check:dt=>{if(G.boostT>0)tut.boosted=true;return tut.boosted?1:0;}},
 ];
 // the same lessons, worded for the simple keys and for camera control
-[['Arrow keys steer the whole suit. Rest your fingers on them.','fingers on the arrow keys','Hold one hand in front of the camera, flat, palm down, fingers pointing at the screen. Your hand is the glider.','a flat hand in view'],
+[['Arrow keys steer the whole suit. Rest your fingers on them.','fingers on the arrow keys','Hold one hand out toward the screen, flat, palm down, fingertips pointing at the camera. Your hand is the glider.','a flat hand in view'],
  ['Hold ↓. You tip forward and pick up speed.','hold ↓','Tip your fingertips down. You tip forward and pick up speed.','fingertips down'],
  ['Hold ↑. You rise, trading speed for height.','hold ↑','Raise your fingertips. You rise, trading speed for height.','fingertips up'],
  ['Let go of the keys. The suit levels out by itself.','let go of the keys','Bring your hand back to flat. The suit levels out by itself.','hand flat'],
@@ -1010,24 +1010,25 @@ function syncControlUI(){for(const b of document.querySelectorAll('.ctlcard'))b.
 function setControl(c){if(c==='camera'){camPrev=settings.control==='camera'?(isTouch?'touch':'simple'):settings.control;openCamSetup();return;}
   if(hand.enabled||hand.status!=='off')disableHand();settings.control=c;store.set('control',c);lastInput=c==='touch'?'touch':c==='mouse'?'mouse':'keys';syncControlUI();}
 function needCam(){if(settings.control==='camera'&&hand.status!=='ready'){camPrev=isTouch?'touch':'simple';openCamSetup();return true;}return false;}
-function openCamSetup(){for(const k in ck)ck[k]=false;$('camSetup').hidden=false;
+function openCamSetup(){for(const k in ck)ck[k]=false;$('camSetup').hidden=false;$('handSens').value=hand.sens;beginRangeLearning();
   if(hand.status==='ready'){requestCalibration();return;}
   enableHand().then(ok=>{if(!ok)logIssue('Camera',hand.error);});}
 function closeCamSetup(use){$('camSetup').hidden=true;
-  if(use&&hand.status==='ready'){settings.control='camera';store.set('control','camera');lastInput='remote';}
+  if(use&&hand.status==='ready'){commitRangeLearning();settings.control='camera';store.set('control','camera');lastInput='remote';}
   else{disableHand();settings.control=camPrev;store.set('control',camPrev);}
   syncControlUI();}
 for(const b of document.querySelectorAll('.ctlcard'))b.onclick=()=>{if(G.state==='menu')setControl(b.dataset.ctl);};
-$('camDone').onclick=()=>closeCamSetup(true);$('camCancel').onclick=()=>closeCamSetup(false);$('camRecalBtn').onclick=()=>requestCalibration();
+$('camDone').onclick=()=>closeCamSetup(true);$('camCancel').onclick=()=>closeCamSetup(false);$('camRecalBtn').onclick=()=>{resetHandRange();beginRangeLearning();for(const k in ck)ck[k]=false;requestCalibration();};
+$('handSens').addEventListener('input',e=>setHandSens(e.target.value));
 window.addEventListener('keydown',e=>{if((e.key==='c'||e.key==='C')&&hand.enabled&&!e.repeat){requestCalibration();toast('Hold your hand flat','good');}});
 function handHud(now){
   const on=hand.enabled&&hand.status==='ready',setup=!$('camSetup').hidden;
   $('camHud').hidden=!(on&&!setup&&(G.state==='play'||G.state==='paused'));
   if(setup){
     $('camMsg').textContent=hand.status==='starting'?'Starting the camera and loading the hand tracker. Allow the camera if your browser asks.':hand.status==='error'?hand.error
-      :!hand.tracking?'Hold one hand up in view: flat, palm down, fingers pointing at the screen, like a paper plane.':!hand.calibrated?'Good. Keep it flat and still for a moment so I can learn your level position.'
-      :'You are flying it. Try each move below, then start.';
-    if(hand.tracking&&hand.calibrated){if(hand.pitch>0.5)ck.Up=true;if(hand.pitch<-0.5)ck.Down=true;if(hand.roll>0.5)ck.Left=true;if(hand.roll<-0.5)ck.Right=true;}
+      :!hand.tracking?'Hold one hand out toward the screen: flat, palm down, fingertips pointing straight at the camera, like a paper plane flying into it.':!hand.calibrated?'Good. Keep it flat and still for a moment so I can learn your level position.'
+      :'You are flying it. Now do each move below as far as feels comfortable. I set the sensitivity from your own reach.';
+    if(hand.tracking&&hand.calibrated){if(hand.rawPitch>0.26)ck.Up=true;if(hand.rawPitch<-0.26)ck.Down=true;if(hand.rawRoll<-0.24)ck.Left=true;if(hand.rawRoll>0.24)ck.Right=true;}
     for(const k in ck)$('ck'+k).classList.toggle('ok',ck[k]);
     $('camDone').disabled=!(on&&hand.calibrated);$('camRecalBtn').disabled=!on;
     $('camSide').textContent=hand.tracking&&hand.side?'Following your '+hand.side+' hand':'';

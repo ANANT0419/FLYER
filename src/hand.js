@@ -5,8 +5,33 @@
 const BASE = import.meta.env.BASE_URL;
 const BONES = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
 const TIPS = [8, 12, 16, 20];
-const PITCH_FULL = 0.56, ROLL_FULL = 0.66;   // radians of hand tilt for full deflection (~32 and ~38 degrees)
-const PITCH_DEAD = 0.06, ROLL_DEAD = 0.07;
+// How far the hand must tilt (radians) for full deflection. The defaults follow what a wrist can do comfortably:
+// bending down goes further than bending up, and a palm-down hand rolls outward (thumb rising) much further than inward.
+// The setup screen replaces these with the player's own reach.
+const DEFAULT_RANGE = { up: 0.48, down: 0.54, out: 0.6, inn: 0.36 };
+const PITCH_DEAD = 0.045, ROLL_DEAD = 0.055;
+const FINGER_SPAN = 2.9;      // wrist-to-fingertip length in knuckle-widths, as seen end-on (nearer fingertips look bigger)
+const CAM_VFOV = 0.72;        // typical webcam vertical field of view, radians
+const load = (k, d) => { try { const v = JSON.parse(localStorage.getItem('flyer.' + k)); return v == null ? d : v; } catch (_) { return d; } };
+const save = (k, v) => { try { localStorage.setItem('flyer.' + k, JSON.stringify(v)); } catch (_) {} };
+let range = Object.assign({}, DEFAULT_RANGE, load('handRange', null) || {});
+let learning = false, peak = { up: 0, down: 0, out: 0, inn: 0 };
+
+// One Euro filter: heavy smoothing while the hand is still (kills jitter), light smoothing while it moves (no lag).
+class OneEuro {
+  constructor(minCut, beta) { this.minCut = minCut; this.beta = beta; this.x = null; this.dx = 0; }
+  reset() { this.x = null; this.dx = 0; }
+  step(x, dt) {
+    if (this.x === null) { this.x = x; return x; }
+    const a = c => 1 / (1 + 1 / (2 * Math.PI * c * dt));
+    const dx = (x - this.x) / dt; this.dx += (dx - this.dx) * a(1.0);
+    this.x += (x - this.x) * a(this.minCut + this.beta * Math.abs(this.dx));
+    return this.x;
+  }
+}
+const fPitch = new OneEuro(0.9, 3.2), fRoll = new OneEuro(0.9, 3.2);
+const med3 = (h, v) => { h.push(v); if (h.length > 3) h.shift(); if (h.length < 3) return v; const [a, b, c] = h; return Math.max(Math.min(a, b), Math.min(Math.max(a, b), c)); };
+let histP = [], histR = [], fistFrames = 0, lastMeasureT = 0;
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
 export const hand = {
@@ -19,6 +44,8 @@ export const hand = {
   pitch: 0, roll: 0,   // -1..1 after calibration (pitch + = climb, roll + = left)
   fist: false,
   openness: 1,
+  sens: load('handSens', 1),   // extra hand sensitivity, 0.6 .. 1.6
+  rawPitch: 0, rawRoll: 0,     // filtered tilt in radians after levelling (roll + = banking right)
   calibrated: false,
   calibProgress: 0,    // 0..1 while holding steady
   lostFor: 0,          // seconds since the hand was last seen
@@ -26,7 +53,7 @@ export const hand = {
 };
 
 let landmarker = null, video = null, stream = null, lastVideoTime = -1;
-let neutral = { pitch: 0.12, roll: 0 };
+let neutral = { pitch: 0, roll: 0 };
 let raw = { pitch: 0, roll: 0 }, smoothP = 0, smoothR = 0;
 let calibHold = 0, calibSumP = 0, calibSumR = 0, calibN = 0, wantCalib = false;
 let lastSeen = 0, lastT = 0, fpsN = 0, fpsT = 0;
@@ -36,32 +63,43 @@ const fistCbs = [], canvases = new Set();
 
 export function onFist(cb) { fistCbs.push(cb); }
 export function attachCanvas(c) { canvases.add(c); }
-export function requestCalibration() { wantCalib = true; hand.calibrated = false; calibHold = 0; calibN = 0; calibSumP = calibSumR = 0; hand.calibProgress = 0; }
+export function setHandSens(v) { hand.sens = clamp(+v || 1, 0.6, 1.6); save('handSens', hand.sens); }
+/** While learning, the furthest comfortable tilt in each direction is recorded; commit turns it into the player's own range. */
+export function beginRangeLearning() { learning = true; peak = { up: 0, down: 0, out: 0, inn: 0 }; }
+export function commitRangeLearning() {
+  if (!learning) return; learning = false;
+  for (const k in peak) if (peak[k] > 0.2) range[k] = clamp(peak[k] * 0.8, 0.2, 0.95);
+  save('handRange', range);
+}
+export function resetHandRange() { range = Object.assign({}, DEFAULT_RANGE); save('handRange', range); }
+export function requestCalibration() { fPitch.reset(); fRoll.reset(); histP = []; histR = []; wantCalib = true; hand.calibrated = false; calibHold = 0; calibN = 0; calibSumP = calibSumR = 0; hand.calibProgress = 0; }
 
 /** Pure maths, exported so it can be tested without a camera.
- *  world: 21 points in camera-aligned metres (x right in the raw image, y down, z away).
- *  Returns hand attitude in radians as the player sees it in a mirrored view. */
-export function attitude(world) {
-  const w = world[0];
-  let tx = 0, ty = 0, tz = 0;
-  for (const i of [8, 12, 16]) { tx += world[i].x; ty += world[i].y; tz += world[i].z; }
-  // finger direction: wrist to the average of the three longest fingertips
-  let fx = tx / 3 - w.x, fy = ty / 3 - w.y, fz = tz / 3 - w.z;
-  const fl = Math.hypot(fx, fy, fz) || 1; fx /= fl; fy /= fl; fz /= fl;
-  // wing line: across the knuckles, pinky to index
-  let sx = world[5].x - world[17].x, sy = world[5].y - world[17].y, sz = world[5].z - world[17].z;
-  const sl = Math.hypot(sx, sy, sz) || 1; sx /= sl; sy /= sl; sz /= sl;
-  // point the wing line toward the player's right (the raw image is un-mirrored, so that is -x)
-  if (sx > 0) { sx = -sx; sy = -sy; sz = -sz; }
-  const pitch = Math.asin(clamp(-fy, -1, 1));                 // + = fingertips raised
-  const roll = Math.atan2(sy, Math.hypot(sx, sz));            // + = right side dipped = banking right
-  // openness: how far the fingertips are from the wrist, relative to the palm length
-  const palm = Math.hypot(world[9].x - w.x, world[9].y - w.y, world[9].z - w.z) || 1e-3;
+ *  The hand is held flat, palm down, fingers pointing at the screen. Seen from the camera that pose makes depth
+ *  unreliable, so tilt is read from the image itself, where the tracker is steady:
+ *   - roll  = the slope of the knuckle line (index knuckle to little-finger knuckle)
+ *   - pitch = how far the fingertips sit above or below the wrist, measured across that line, in knuckle-widths
+ *  lm: 21 image points (x right, y down, 0..1, raw un-mirrored camera). world: the same in metres. aspect: width / height. */
+export function attitude(lm, world, aspect) {
+  const X = p => (1 - p.x) * aspect, Y = p => p.y;                    // mirrored, square units
+  let kx = X(lm[5]) - X(lm[17]), ky = Y(lm[5]) - Y(lm[17]);
+  if (kx < 0) { kx = -kx; ky = -ky; }                                  // knuckle line, pointing to the player's right
+  const W = Math.hypot(kx, ky) || 1e-4; kx /= W; ky /= W;
+  const roll = Math.atan2(ky, kx);                                     // + = right side lower = banking right
+  const tx = (X(lm[8]) + X(lm[12]) + X(lm[16])) / 3 - X(lm[0]), ty = (Y(lm[8]) + Y(lm[12]) + Y(lm[16])) / 3 - Y(lm[0]);
+  const lift = (tx * ky - ty * kx) / W;                                // fingertips above the wrist, across the knuckle line
+  let pitch = Math.asin(clamp(lift / FINGER_SPAN, -1, 1));
+  // a hand held low in the frame is seen from above and looks tipped down; undo that so moving the hand does not steer
+  const cy = (lm[0].y + lm[9].y) / 2;
+  pitch += Math.atan((cy - 0.5) * 2 * Math.tan(CAM_VFOV / 2));
+  // open or fist: fingertip distance from the wrist against palm length, in 3D
+  const w = world[0], palm = Math.hypot(world[9].x - w.x, world[9].y - w.y, world[9].z - w.z) || 1e-3;
   let o = 0; for (const i of TIPS) o += Math.hypot(world[i].x - w.x, world[i].y - w.y, world[i].z - w.z);
-  return { pitch, roll, openness: o / 4 / palm, wingConfidence: Math.abs(sx) };
+  return { pitch, roll, openness: o / 4 / palm };
 }
 
-const shape = (v, dead, full) => { const a = Math.abs(v); if (a < dead) return 0; const t = clamp((a - dead) / (full - dead), 0, 1); return Math.sign(v) * (t * 0.65 + t * t * 0.35); };
+// dead zone at the centre, then a curve that is gentle near level and firm toward the end of the reach
+const shape = (v, dead, full) => { const a = Math.abs(v); if (a < dead) return 0; const t = clamp((a - dead) / Math.max(0.05, full - dead), 0, 1); return Math.sign(v) * (t * 0.6 + t * t * 0.4); };
 
 export async function enableHand() {
   if (hand.status === 'starting' || hand.status === 'ready') { hand.enabled = true; return true; }
@@ -75,7 +113,7 @@ export async function enableHand() {
       const files = await FilesetResolver.forVisionTasks(BASE + 'mediapipe');
       const make = delegate => HandLandmarker.createFromOptions(files, {
         baseOptions: { modelAssetPath: BASE + 'models/hand_landmarker.task', delegate },
-        runningMode: 'VIDEO', numHands: 2, minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5,
+        runningMode: 'VIDEO', numHands: 2, minHandDetectionConfidence: 0.4, minHandPresenceConfidence: 0.4, minTrackingConfidence: 0.4,
       });
       try { landmarker = await make('GPU'); } catch (_) { landmarker = await make('CPU'); }
     }
@@ -116,12 +154,18 @@ export function updateHand(now) {
   fpsT += dt; if (fpsT >= 1) { hand.fps = Math.round(fpsN / fpsT); fpsN = 0; fpsT = 0; }
   hand.lostFor = (now - lastSeen) / 1000;
   hand.tracking = lastSeen > 0 && hand.lostFor < 0.35;
-  // smooth toward the measured attitude; faster when the hand moves fast, calmer when it is still
-  const tp = hand.tracking ? raw.pitch : 0, tr = hand.tracking ? raw.roll : 0;
-  const k = (cur, target) => 1 - Math.exp(-dt * (9 + 60 * Math.min(1, Math.abs(target - cur) * 2.2)));
-  if (!hand.fist || !hand.tracking) { smoothP += (tp - smoothP) * k(smoothP, tp); smoothR += (tr - smoothR) * k(smoothR, tr); }
-  hand.pitch = shape(smoothP, PITCH_DEAD, PITCH_FULL);
-  hand.roll = shape(-smoothR, ROLL_DEAD, ROLL_FULL);          // + = turn left, matching the game's arms
+  // the filtered tilt arrives at camera rate; glide toward it so the suit moves smoothly between camera frames
+  const tp = hand.tracking ? raw.pitch : 0, tr = hand.tracking ? raw.roll : 0, g = 1 - Math.exp(-dt * (hand.tracking ? 26 : 6));
+  smoothP += (tp - smoothP) * g; smoothR += (tr - smoothR) * g;
+  hand.rawPitch = smoothP; hand.rawRoll = smoothR;
+  // a palm-down hand rolls outward (thumb rising) further than inward, and which way is "outward" depends on the hand
+  const rightHand = hand.side !== 'left', bankRight = smoothR > 0, outward = bankRight === rightHand;
+  hand.pitch = shape(smoothP * hand.sens, PITCH_DEAD, smoothP > 0 ? range.up : range.down);
+  hand.roll = shape(-smoothR * hand.sens, ROLL_DEAD, outward ? range.out : range.inn);   // + = turn left, matching the game's arms
+  if (learning && hand.tracking && hand.calibrated && !hand.fist) {
+    if (smoothP > peak.up) peak.up = smoothP; if (-smoothP > peak.down) peak.down = -smoothP;
+    const ar = Math.abs(smoothR); if (outward) { if (ar > peak.out) peak.out = ar; } else if (ar > peak.inn) peak.inn = ar;
+  }
   const live = hand.tracking && hand.calibrated;
   hand.L = live ? clamp(hand.pitch + hand.roll, -1, 1) : 0;
   hand.R = live ? clamp(hand.pitch - hand.roll, -1, 1) : 0;
@@ -138,20 +182,24 @@ function pickActive() {
 }
 
 function measure(h, now) {
-  const a = attitude(h.wl);
+  const a = attitude(h.lm, h.wl, video.videoWidth / (video.videoHeight || 1));
+  const dt = clamp(lastMeasureT ? (now - lastMeasureT) / 1000 : 1 / 30, 1 / 120, 0.2); lastMeasureT = now;
   lastSeen = now; hand.openness = a.openness;
+  // a fist must hold for a few camera frames, so one bad frame cannot fire the boost or freeze the steering
   const wasFist = hand.fist;
-  if (!hand.fist && a.openness < 1.28) hand.fist = true; else if (hand.fist && a.openness > 1.55) hand.fist = false;
+  if (a.openness < 1.2) fistFrames = Math.min(fistFrames + 1, 6); else if (a.openness > 1.5) fistFrames = 0;
+  hand.fist = fistFrames >= 3;
   if (hand.fist && !wasFist && hand.calibrated) for (const cb of fistCbs) { try { cb(); } catch (_) {} }
-  if (hand.fist) return;                                       // a fist has no usable finger direction: hold the last attitude
+  if (fistFrames > 0) return;                                  // closing or closed: hold the last tilt
+  const p = fPitch.step(med3(histP, a.pitch), dt), r = fRoll.step(med3(histR, a.roll), dt);
   if (wantCalib) {
-    // hold a flat hand steady for a moment; its attitude becomes "level"
-    const steady = Math.abs(a.pitch - raw.pitch - neutral.pitch) < 0.09 && Math.abs(a.roll - raw.roll - neutral.roll) < 0.09 && a.openness > 1.6;
-    if (steady) { calibHold += 1; calibSumP += a.pitch; calibSumR += a.roll; calibN++; } else { calibHold = 0; calibSumP = calibSumR = 0; calibN = 0; }
-    hand.calibProgress = clamp(calibN / 22, 0, 1);
-    if (calibN >= 22) { neutral = { pitch: calibSumP / calibN, roll: calibSumR / calibN }; wantCalib = false; hand.calibrated = true; hand.calibProgress = 1; smoothP = smoothR = 0; }
+    // hold a flat hand steady for a moment; its tilt becomes "level"
+    const steady = Math.abs(a.pitch - p) < 0.07 && Math.abs(a.roll - r) < 0.07 && a.openness > 1.5;
+    if (steady) { calibSumP += p; calibSumR += r; calibN++; } else { calibSumP = calibSumR = 0; calibN = 0; }
+    hand.calibProgress = clamp(calibN / 24, 0, 1);
+    if (calibN >= 24) { neutral = { pitch: calibSumP / calibN, roll: calibSumR / calibN }; wantCalib = false; hand.calibrated = true; hand.calibProgress = 1; smoothP = smoothR = 0; }
   }
-  raw.pitch = a.pitch - neutral.pitch; raw.roll = a.roll - neutral.roll;
+  raw.pitch = p - neutral.pitch; raw.roll = r - neutral.roll;
 }
 
 /* ---------- the tracking view: mirrored camera, hand skeleton, attitude dial ---------- */
@@ -192,7 +240,7 @@ function draw() {
       g.fillStyle = g.strokeStyle; g.beginPath(); g.arc(0, 0, r * 0.11, 0, 7); g.fill(); g.restore();
     }
     // status strip
-    const msg = hand.status === 'starting' ? 'Starting camera…' : !hand.tracking ? 'Show a flat hand' : !hand.calibrated ? 'Hold your hand flat and still' : hand.fist ? 'Fist: boost' : (hand.side ? hand.side.toUpperCase() + ' HAND' : 'HAND') + ' · tracking';
+    const msg = hand.status === 'starting' ? 'Starting camera…' : !hand.tracking ? 'Point a flat hand at the screen' : !hand.calibrated ? 'Hold your hand flat and still' : hand.fist ? 'Fist: boost' : (hand.side ? hand.side.toUpperCase() + ' HAND' : 'HAND') + ' · tracking';
     g.font = '700 ' + Math.max(10, Math.round(W / 22)) + 'px "Bricolage Grotesque",system-ui,sans-serif'; g.textBaseline = 'top';
     const tw = g.measureText(msg).width; g.fillStyle = 'rgba(13,16,32,.72)'; g.fillRect(6, 6, tw + 14, Math.max(10, W / 22) + 10);
     g.fillStyle = hand.tracking && hand.calibrated ? '#9be08a' : '#ffb04a'; g.fillText(msg, 13, 11);
