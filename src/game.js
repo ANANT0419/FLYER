@@ -5,7 +5,7 @@ import {createPost} from './post.js';
 import {phone,hostPhone,stopPhone,updatePhone,onPhoneBoost,phoneBuzz,setPhoneSens,phoneWasPaired} from './link.js';
 import QRCode from 'qrcode';
 import {rtStats} from './rt.js';
-import {room,joinRoom,leaveRoom,setMyName,startRace,sendState,sendFinish,onRaceStart,onRoomChange,ghostPose,newRoomCode,cleanCode} from './race.js';
+import {room,joinRoom,leaveRoom,setMyName,setMyLevel,startRace,sendState,sendFinish,onRaceStart,onRoomChange,ghostPose,newRoomCode,cleanCode} from './race.js';
 (function(){
 "use strict";
 /* ================= issue log ================= */
@@ -45,7 +45,7 @@ const RACE=store.get('track','gorge')==='race';   // the race canyon is a differ
 const WALL_D=RACE?58:92;                           // where the canyon walls start, metres from the middle
 const bestKey=()=>TRACK==='coaster'?'best.coaster':'best';let best=store.get('best',0);
 const isTouch=!!(window.matchMedia&&matchMedia('(pointer:coarse)').matches);let lastInput=isTouch?'touch':'keys';
-const settings={view:store.get('view','3p')==='fp'?'fp':'3p',invert:store.get('invert',false),sens:store.get('sens',1),mode:store.get('mode','two'),control:store.get('control',isTouch?'touch':'simple')};
+const settings={view:store.get('view','3p')==='fp'?'fp':'3p',invert:store.get('invert',false),sens:store.get('sens',1),mode:store.get('mode','two'),guide:['easy','normal','pro'].includes(store.get('guide','easy'))?store.get('guide','easy'):'easy',control:store.get('control',isTouch?'touch':'simple')};
 if(isTouch&&settings.control!=='camera')settings.control='touch';if(!isTouch&&settings.control==='touch')settings.control='simple';
 const ctlMode=()=>lastInput==='touch'?settings.mode:lastInput==='remote'?(settings.control==='phone'?'phone':'hand'):lastInput==='keys'?(settings.control==='arms'?'keys':'simple'):lastInput;
 
@@ -509,7 +509,43 @@ float dp=distance(vW,uPlayer);float near=smoothstep(3.0,16.0,dp);float far=1.0-s
 float al=(0.05+0.30*dash+0.18*spiral)*(0.35+0.65*fres)*near*far*uOp;
 vec3 col=mix(vec3(1.0,0.9,0.72),vec3(0.8,0.97,1.0),dash);gl_FragColor=vec4(col*al,al);}`});
 
-/* ================= per-track objects: the current, coaster rails, gems, rings ================= */
+/* ================= the guided line ================= */
+// The route through the course: the line of the old wind current, and in the race canyon the line through every gate.
+// The glider rides it by itself as long as the player's tilt roughly matches what the next bend or dip needs.
+// Levels: win = how far off (in full-tilt units) still counts as right enough; str = how much of the steering the
+// line takes over once locked; pull = how firmly it draws you onto the line (per second).
+// lean = when a bend or dip clearly asks for a tilt, you must give at least this share of it, the right way round,
+// so even Easy is not an autopilot.
+const GUIDE={easy:{win:0.5,lean:0.3,str:0.9,pull:1.6,name:'Easy'},normal:{win:0.25,lean:0.5,str:0.6,pull:0.9,name:'Normal'},pro:{win:0.1,lean:0.7,str:0.15,pull:0.2,name:'Pro'}};
+const LINE_SPEED=0.15;                            // on the line you fly 15% faster
+let gateDh=[];                                    // race: how far each gate sits above the current's line, so the route threads it
+function routePoint(s,out){streamAt(s);let h=SH;
+  if(gateDh.length){let i=0;while(i<gateDh.length&&gateDh[i].s<s)i++;const a=gateDh[i-1],b=gateDh[i];
+    if(a&&b){const t=smoothstep(a.s,b.s,s);h+=a.dh+(b.dh-a.dh)*t;}else if(a)h+=a.dh*(1-smoothstep(a.s,a.s+80,s));else if(b)h+=b.dh*smoothstep(b.s-80,b.s,s);}
+  return worldAt(s,SD,h,out);}
+// the glowing route ribbon just under the line: gold while you are on it, faint when you drift
+// blended as premultiplied colour over a partly kept background: a solid gold band that still glows (bloom picks it up)
+const ribbonMat=new THREE.ShaderMaterial({transparent:true,depthWrite:false,side:THREE.DoubleSide,blending:THREE.CustomBlending,blendSrc:THREE.OneFactor,blendDst:THREE.OneMinusSrcAlphaFactor,
+  uniforms:{uTime:timeU,uS:{value:0},uLock:{value:0},uW:{value:1.7}},
+  // a band that always turns its face to the camera, like a light trail, so it reads the same from any angle
+  vertexShader:'attribute float aS;attribute float aU;attribute vec3 aTan;uniform float uW;varying float vS;varying float vU;void main(){vS=aS;vU=aU;vec3 side=normalize(cross(aTan,cameraPosition-position));gl_Position=projectionMatrix*viewMatrix*vec4(position+side*aU*uW,1.0);}',
+  fragmentShader:`uniform float uTime,uS,uLock;varying float vS;varying float vU;
+void main(){float ahead=vS-uS;float fade=smoothstep(-6.0,14.0,ahead)*(1.0-smoothstep(170.0,330.0,ahead));
+float edge=1.0-abs(vU);float core=pow(edge,0.7);float rim=smoothstep(0.55,0.95,abs(vU))*0.6;
+float flow=0.7+0.3*sin((vS-uTime*55.0)*0.32);
+vec3 gold=vec3(1.0,0.74,0.28),pale=vec3(0.62,0.72,0.95);vec3 col=mix(pale,gold,uLock);
+float al=fade*(core*flow*0.8+rim)*(0.3+0.6*uLock);gl_FragColor=vec4(col*al*1.15,al*0.55);}`});
+function buildRibbon(add){
+  const step=3,n=Math.floor(LEN/step)+1,pos=new Float32Array(n*6),tan=new Float32Array(n*6),aS=new Float32Array(n*2),aU=new Float32Array(n*2),idx=[];
+  const p=new THREE.Vector3(),q=new THREE.Vector3();
+  for(let i=0;i<n;i++){const s=Math.min(LEN,i*step);routePoint(s,p);routePoint(Math.min(LEN,s+2),q);if(s+2>LEN){q.sub(p).negate();routePoint(s-2,q).sub(p).negate();}else q.sub(p);q.normalize();p.y-=1.2;
+    for(let k=0;k<2;k++){const j=i*2+k;pos.set([p.x,p.y,p.z],j*3);tan.set([q.x,q.y,q.z],j*3);aS[j]=s;aU[j]=k?1:-1;}
+    if(i<n-1){const a=i*2;idx.push(a,a+1,a+2,a+1,a+3,a+2);}}
+  const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.BufferAttribute(pos,3));g.setAttribute('aTan',new THREE.BufferAttribute(tan,3));
+  g.setAttribute('aS',new THREE.BufferAttribute(aS,1));g.setAttribute('aU',new THREE.BufferAttribute(aU,1));g.setIndex(idx);
+  const m=add(new THREE.Mesh(g,ribbonMat));m.frustumCulled=false;m.renderOrder=2;}
+
+/* ================= per-track objects: coaster rails, gems, rings ================= */
 function makeGem(s,d,h,ph){const base=worldAt(s,d,h,new THREE.Vector3());return {s,base,cur:base.clone(),got:false,pull:0,phase:ph};}
 const gemGeo=new THREE.OctahedronGeometry(1.6,0),gemMat=new THREE.MeshLambertMaterial({color:0x86f0ff,emissive:0x2aa6c4,flatShading:true});
 const ringGeo=new THREE.TorusGeometry(7,0.75,8,28);
@@ -522,9 +558,8 @@ function buildTrack(){
   for(const o of trackObjs){scene.remove(o);if(o.geometry&&o.geometry!==gemGeo&&o.geometry!==ringGeo)o.geometry.dispose();if(o.userData.ownMat)o.material.dispose();}
   trackObjs.length=0;const add=o=>{scene.add(o);trackObjs.push(o);return o;};
   const tr=mulberry(TRACK==='coaster'?4242:1313),r2=(a,b)=>a+(b-a)*tr();
-  if(RACE){buildGates(add);gems=[];rings=[];gemMesh=add(new THREE.InstancedMesh(gemGeo,gemMat,1));gemMesh.count=0;return;}
-  const sp=[];for(let s=0;s<=LEN;s+=10)sp.push(streamPoint(s,new THREE.Vector3()));
-  const tube=add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(sp),Math.floor(LEN/5),TRACK==='coaster'?2.6:2.1,10,false),streamMat));tube.frustumCulled=false;
+  if(RACE){buildGates(add);buildRibbon(add);gems=[];rings=[];gemMesh=add(new THREE.InstancedMesh(gemGeo,gemMat,1));gemMesh.count=0;return;}
+  buildRibbon(add);   // the route ribbon replaces the old glowing current tube (owner's choice)
   if(TRACK==='coaster'){
     for(const side of [-1,1]){const rp=[];for(let s=0;s<=LEN;s+=8){const p=streamPoint(s,new THREE.Vector3());p.addScaledVector(_r,side*2.8);p.y-=1.9;rp.push(p);}
       const rail=add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(rp),Math.floor(LEN/4),0.13,6,false),railMat));rail.frustumCulled=false;}
@@ -562,6 +597,7 @@ function buildGates(add){
     m.position.copy(pos);m.lookAt(pos.clone().add(_t));m.frustumCulled=true;
     const post=add(new THREE.Mesh(gatePostGeo,m.material));const gy=groundAt(gs,d);post.scale.y=Math.max(0.1,pos.y-GATE_R-gy);post.position.set(pos.x,gy+post.scale.y/2,pos.z);
     gates.push({s:gs,d,pos,mesh:m,post,state:0});}
+  streamAt(0);gateDh=gates.map(g=>{streamAt(g.s);return {s:g.s,dh:(g.pos.y-floorY(g.s))-SH};});
 }
 function a_inner(a,d){return Math.sqrt(Math.max(0,(a.r-9)*(a.r-9)-d*d))+a.hc;}
 function resetGates(){for(const g of gates){g.state=0;paintGate(g);}G.gi=0;if(gates[0])paintGate(gates[0],true);}
@@ -801,7 +837,7 @@ function drawThumbs(){
 
 /* ================= game state ================= */
 const G={state:'menu',mode:'main',pos:new THREE.Vector3(),yaw:0,pitch:0,roll:0,speed:70,s:0,d:0,idx:0,yawRate:0,pitchRate:0,
-  score:0,combo:0,comboT:0,gems:0,rings:0,crashes:0,boost:0.34,boostT:0,crashT:0,invuln:0,time:0,skim:false,inStream:false,menuS:0,
+  score:0,combo:0,comboT:0,gems:0,rings:0,crashes:0,boost:0.34,boostT:0,crashT:0,invuln:0,time:0,skim:false,inStream:false,lock:0,onLine:0,flow:1,lineOff:0,raceLvl:'',menuS:0,
   armL:0,armR:0,pitchIn:0,turnIn:0,bumpT:0,gust:0,oobT:0,rescueT:0,inThermal:false,progS:0,progT:0};
 const dir=new THREE.Vector3();
 const trackYaw=()=>Math.atan2(-_t.x,-_t.z);
@@ -819,7 +855,7 @@ function tryBoost(){if(G.state!=='play'||G.boostT>0)return;
 function updraft(dt){G.inThermal=false;for(const th of thermals){if(Math.abs(th.s-G.s)>25)continue;const dx=G.pos.x-th.c.x,dz=G.pos.z-th.c.z,dd=Math.sqrt(dx*dx+dz*dz);
   if(dd<th.r&&G.pos.y<th.c.y+150){G.inThermal=true;const k=1-dd/th.r;G.pos.y+=20*k*dt;G.speed=Math.min(160,G.speed+4*k*dt);if(!th.hit){th.hit=true;toast('Updraft!','gem');tone(440,0.5,'sine',0.05,1.6);}}}}
 function startRescue(){G.rescueT=0.45;$('fadeB').classList.add('on');}
-function finishRescue(){placeAt(clamp(G.s,30,LEN-400),0);G.progS=G.s;G.progT=0;G.speed=70;G.invuln=1.5;G.combo=0;G.oobT=0;$('fadeB').classList.remove('on');toast('Back on the current','good');}
+function finishRescue(){placeAt(clamp(G.s,30,LEN-400),0);G.progS=G.s;G.progT=0;G.speed=70;G.invuln=1.5;G.combo=0;G.oobT=0;$('fadeB').classList.remove('on');toast('Back on the line','good');}
 function crash(){G.crashes++;G.crashT=1.1;G.combo=0;G.comboT=0;G.speed=0;toast('Bonk! Combo lost','bad');tone(110,0.4,'triangle',0.15,0.5);
   const f=$('flash');f.style.opacity=1;setTimeout(()=>f.style.opacity=0,350);buzz(120);}
 function softBump(){G.bumpT=0.6;G.pitch=Math.max(G.pitch,0.25);G.speed=Math.max(G.speed*0.85,45);if(!G._bumpMsg||G.time-G._bumpMsg>3){toast('Careful, pull up','bad');G._bumpMsg=G.time;}}
@@ -842,6 +878,33 @@ function collectRings(list){
       toast(G.mode==='tut'?'Ring!':'Ring +'+pts,'ring');tone(523,0.25,'triangle',0.08);setTimeout(()=>tone(784,0.3,'triangle',0.08),90);buzz(20);}}
 }
 
+/* ---- guided line: does the player's tilt roughly match what the line needs? ---- */
+const _gq=new THREE.Vector3(),_gr=new THREE.Vector3();
+function guideLevel(){return RACE&&!G.solo&&room.status==='in'&&GUIDE[G.raceLvl]?G.raceLvl:settings.guide;}
+function guide(dt){
+  const GL=GUIDE[guideLevel()];routePoint(G.s,_gq);G.lineOff=_gq.distanceTo(G.pos);
+  // what the line needs: aim at a point on it a little under a second ahead (pure pursuit). The bend or dip it asks
+  // for stays the same while you follow it, so a bend always needs your tilt, never only the line's.
+  const look=clamp(G.speed*0.8,30,110);routePoint(Math.min(LEN,G.s+look),_gr);
+  const dx=_gr.x-G.pos.x,dz=_gr.z-G.pos.z,dy=_gr.y-G.pos.y,hd=Math.hypot(dx,dz)||1;
+  const wantYaw=Math.atan2(-dx,-dz),wantPitch=Math.atan2(dy,hd);
+  const needP=clamp((wantPitch+0.1)/0.78,-1,1);   // inputs here are already in game terms (after invert)
+  const needT=clamp(angDiff(wantYaw,G.yaw)*2*Math.max(G.speed,30)/look/1.6,-1,1);
+  const under=(inp,need)=>Math.abs(need)>0.15&&inp*Math.sign(need)<Math.abs(need)*GL.lean;   // not leaning into it
+  const miss=Math.max(Math.hypot(G.pitchIn-needP,G.turnIn-needT),under(G.pitchIn,needP)||under(G.turnIn,needT)?GL.win*2:0);
+  const near=1-smoothstep(45,90,G.lineOff);
+  const want=(1-smoothstep(GL.win,GL.win*2,miss))*near*(G.crashT>0?0:1);
+  G.lock+=(want-G.lock)*(1-Math.exp(-dt*(want>G.lock?3:1.6)));
+  G.onLine=G.lock*(1-smoothstep(6,25,G.lineOff));G.miss=miss;G.needP=needP;G.needT=needT;
+  // once locked, the line takes over part of the steering (most of it on Easy, a little on Pro)
+  const k=G.lock*GL.str;G.effP=G.pitchIn+(needP-G.pitchIn)*k;G.effT=G.turnIn+(needT-G.turnIn)*k;
+}
+// and draws you onto it sideways and up/down, never along it
+function linePull(dt){
+  const GL=GUIDE[guideLevel()],k=1-Math.exp(-dt*GL.pull*G.lock);if(k<=0)return;
+  locate();routePoint(G.s,_gq);frame(G.s);_gq.sub(G.pos);const along=_gq.dot(_t);_gq.addScaledVector(_t,-along);
+  G.pos.addScaledVector(_gq,k);}
+
 function update(dt){
   const isTut=G.mode==='tut';G.time+=dt;
   if(G.rescueT>0){G.rescueT-=dt;if(G.rescueT<=0)finishRescue();return;}
@@ -851,20 +914,21 @@ function update(dt){
   // already predicts past the delay, link.js); camera: ~70 ms (hand tracking is noisier); keys and mouse ~300 ms.
   const direct=settings.control==='phone'||settings.control==='camera',ph=settings.control==='phone',kA=direct?30:10,kP=ph?70:direct?14:3.2,kR=ph?70:direct?14:4.2;G.direct=direct;
   const inp=readInput(dt);G.armL+=(inp.L-G.armL)*(1-Math.exp(-dt*kA));G.armR+=(inp.R-G.armR)*(1-Math.exp(-dt*kA));
-  let pitchIn=(inp.L+inp.R)/2;if(settings.invert)pitchIn=-pitchIn;const turnIn=(inp.L-inp.R)/2;G.pitchIn=pitchIn;G.turnIn=turnIn;
-  // where is the current?
-  streamPoint(G.s,_sp);const streamD=SD,streamOff=_sp.distanceTo(G.pos);G.inStream=!RACE&&streamOff<(TRACK==='coaster'?7.5:5.5);
-  const fy=floorY(G.s),hRel=G.pos.y-fy;frame(G.s);
+  let pitchIn=(inp.L+inp.R)/2;if(settings.invert)pitchIn=-pitchIn;let turnIn=(inp.L-inp.R)/2;
+  if(G.bot){if(G.bot==='follow'){pitchIn=G.needP||0;turnIn=G.needT||0;}else{pitchIn=G.bot.p;turnIn=G.bot.t;}}   // test hook (?debug): a scripted pilot
+  G.pitchIn=pitchIn;G.turnIn=turnIn;
+  // where is the line?
+  streamPoint(G.s,_sp);const streamD=SD;routePoint(G.s,_sp);const streamOff=_sp.distanceTo(G.pos);
+  const fy=floorY(G.s),hRel=G.pos.y-fy;
+  guide(dt);pitchIn=G.effP;turnIn=G.effT;
+  G.inStream=G.onLine>0.5;frame(G.s);
   let tgt=pitchIn*0.78-0.1;
   if(G.speed<34)tgt-=(34-G.speed)*0.025;
   if(hRel>200)tgt-=(hRel-200)*0.012;
-  if(G.inStream&&Math.abs(pitchIn)<0.2)tgt+=clamp((_sp.y-G.pos.y)*0.03,-0.18,0.18);
-  if(TRACK==='coaster'&&G.inStream){const y0=_sp.y;streamPoint(G.s+18,_sp2);const slope=Math.atan2(_sp2.y-y0,18);tgt+=(slope-tgt)*0.6*(1-Math.min(1,Math.abs(pitchIn)*1.5))+clamp((y0-G.pos.y)*0.04,-0.25,0.25);frame(G.s);}
   tgt-=Math.abs(Math.sin(G.roll))*0.1;tgt=clamp(tgt,-1.1,0.85);const prevPitch=G.pitch;G.pitch+=(tgt-G.pitch)*(direct?1-Math.exp(-dt*kP):Math.min(1,dt*kP));
   G.pitchRate+=((G.pitch-prevPitch)/Math.max(dt,1e-3)-G.pitchRate)*Math.min(1,dt*6);
   const tyaw=trackYaw();let yawRate=turnIn*1.6;
   const assist=Math.abs(turnIn)<0.08?0.35:0.08;yawRate+=angDiff(tyaw-(G.d-streamD)*0.006,G.yaw)*assist;
-  if(G.inStream&&Math.abs(turnIn)<0.2)yawRate+=angDiff(tyaw-(G.d-streamD)*0.02,G.yaw)*0.5;
   if(Math.abs(G.d)>125)yawRate+=angDiff(tyaw-Math.sign(G.d)*0.6,G.yaw)*1.2;
   // Coordinated turn: you bank first, and the bank is what curves your path (tighter at low speed, wider at high speed).
   {const v=Math.max(G.speed,25);const tgtRoll=clamp(Math.atan(yawRate*v/95),-1.15,1.15);G.roll+=(tgtRoll-G.roll)*(direct?1-Math.exp(-dt*kR):Math.min(1,dt*kR));
@@ -873,13 +937,15 @@ function update(dt){
   const clear=G.pos.y-groundAt(G.s,G.d);G.skim=clear>0&&clear<7.5;
   if(G.skim){acc+=6;G.score+=28*dt*multiplier();}
   if(G.inStream){acc+=5;G.score+=6*dt;}
+  acc-=4*(1-G.lock)*smoothstep(12,40,G.lineOff);   // drifting off the line costs speed
   if(G.boostT>0){G.boostT-=dt;acc+=42;}
   const gu=gustAt(G.pos.x,G.pos.z,timeU.value);G.gust=gu;acc+=gu*3;G.roll+=Math.sin(timeU.value*9)*gu*0.03;
   G.speed=clamp(G.speed+acc*dt,isTut?40:20,G.boostT>0?178:160);
   if(TRACK==='coaster'&&G.inStream)G.speed=Math.max(G.speed,64);
   if(G.speed<34&&G.time-(G._stall||-9)>4){G._stall=G.time;toast('Too slow, dive to pick up speed','bad');buzz(40);}
   dir.set(-Math.sin(G.yaw)*Math.cos(G.pitch),Math.sin(G.pitch),-Math.cos(G.yaw)*Math.cos(G.pitch));
-  G.pos.addScaledVector(dir,G.speed*dt);frame(G.s);G.pos.addScaledVector(_r,Math.sin(timeU.value*0.4)*gu*2.5*dt);updraft(dt);locate();
+  G.flow+=(1+LINE_SPEED*G.onLine-G.flow)*(1-Math.exp(-dt*2));
+  G.pos.addScaledVector(dir,G.speed*G.flow*dt);linePull(dt);frame(G.s);G.pos.addScaledVector(_r,Math.sin(timeU.value*0.4)*gu*2.5*dt);updraft(dt);locate();
   // collisions
   if(G.invuln>0)G.invuln-=dt;if(G.bumpT>0)G.bumpT-=dt;
   const gy=groundAt(G.s,G.d);
@@ -937,8 +1003,8 @@ const STEPS=[
   {title:'Turn right',zone:['u','d'],ghost:['u','d'],
     text:{two:'Right thumb down, left thumb up. You lean and curve right.',one:'Drag your thumb to the right.',keys:'Hold W and ↓ together, or just D.',mouse:'Drag the mouse to the right.'},
     alt:{two:'right thumb down, left up',one:'drag thumb right',keys:'W + ↓, or D',mouse:'drag right'},check:dt=>hold(G.turnIn<-0.38,0.9,dt)},
-  {title:'Ride the current',zone:['n','n'],ghost:['c','c'],
-    text:{all:'The glowing stream is the best line through the gorge. Fly into it and stay for 3 seconds. Inside it you gain speed and drift with it.'},
+  {title:'Ride the line',zone:['n','n'],ghost:['c','c'],
+    text:{all:'The glowing ribbon is the line through the gorge. Get onto it and roughly match its bends and dips: it turns gold, carries you along and you fly faster. Stay on it for 3 seconds.'},
     check:dt=>{if(G.inStream)tut.acc+=dt;return tut.acc/3;}},
   {title:'Thread the rings',zone:['n','n'],ghost:['c','c'],enter:()=>{tut.rings=0;spawnTutRings();},
     text:{all:'Three gold rings ahead. If you drift off line, the arrow shows where to go.'},
@@ -1028,6 +1094,7 @@ function updateVisuals(dt,now){
   gemMesh.visible=!isTut;tutGemMesh.visible=isTut;rings.forEach(r=>r.mesh.visible=!isTut);tutRings.forEach(r=>{r.mesh.visible=isTut&&r.s>0;});
   if(isTut)drawGems(tutGems,tutGemMesh,now);else drawGems(gems,gemMesh,now);
   const flying=G.state!=='menu';
+  ribbonMat.uniforms.uS.value=flying?G.s:(G.menuS||0);{const u=ribbonMat.uniforms.uLock;u.value+=((flying?G.onLine:0.6)-u.value)*Math.min(1,dt*5);}
   player.visible=flying&&settings.view!=='fp'&&!(G.crashT>0&&Math.floor(now*14)%2===0)&&!(G.invuln>0&&Math.floor(now*10)%2===0);
   player.position.copy(G.pos);eul.set(G.pitch,G.yaw,G.roll,'YXZ');rig.setRotationFromEuler(eul);
   {const fl=G.state==='play'&&G.speed<38?Math.sin(now*31)*0.18:0;updatePilot(G.armL+fl,G.armR-fl);}
@@ -1053,16 +1120,16 @@ function myPlace(){if(G.solo||room.status!=='in')return null;let n=1,total=1;con
 const ord=n=>n+(n%100>=11&&n%100<=13?'th':['th','st','nd','rd'][n%10]||'th');
 function updateHUD(){
   if(RACE){$('score').textContent=fmtRace(raceTime()+G.pen);const pl=myPlace();$('mult').hidden=!pl;if(pl)$('mult').textContent=ord(pl.n)+' / '+pl.total;
-    $('gemcount').textContent='Gate '+Math.min(G.gi+1,gates.length)+' / '+gates.length+(G.pen?' · +'+G.pen+' s':'');$('skim').hidden=!G.skim;$('curChip').hidden=true;$('thermChip').hidden=!G.inThermal;
+    $('gemcount').textContent='Gate '+Math.min(G.gi+1,gates.length)+' / '+gates.length+(G.pen?' · +'+G.pen+' s':'');$('skim').hidden=!G.skim;$('curChip').hidden=!G.inStream;$('thermChip').hidden=!G.inThermal;
     {const ob=$('oob');if(G.oobT>3){ob.hidden=false;ob.innerHTML='Off course · back on course in <b>'+Math.ceil(12-G.oobT)+'s</b> · follow the arrow';}else ob.hidden=true;}
     $('prog').style.width=(G.s/FINISH_S*100).toFixed(1)+'%';$('dist').textContent=Math.max(0,Math.round(FINISH_S-G.s))+' m to finish';
-    $('speed').textContent=Math.round(G.speed*1.5);$('boostFill').style.width=(G.boost*100)+'%';const ready=G.boost>=0.33,bl=$('boostLbl');bl.classList.toggle('ready',ready);
+    $('speed').textContent=Math.round(G.speed*G.flow*1.5);$('boostFill').style.width=(G.boost*100)+'%';const ready=G.boost>=0.33,bl=$('boostLbl');bl.classList.toggle('ready',ready);
     bl.textContent=G.boostT>0?'Boosting':ready?(isTouch?'Boost ready · double-tap':'Boost ready · Space'):'Boost';return;}
   $('score').textContent=Math.floor(G.score).toLocaleString();const m=multiplier();$('mult').textContent='x'+(m%1?m.toFixed(1):m);
   $('gemcount').textContent=G.gems+' / '+gems.length+' gems';$('skim').hidden=!G.skim;$('curChip').hidden=!G.inStream;$('thermChip').hidden=!G.inThermal;
-  {const ob=$('oob');if(G.oobT>3){ob.hidden=false;ob.innerHTML='Off course · back on the current in <b>'+Math.ceil(12-G.oobT)+'s</b> · follow the arrow';}else ob.hidden=true;}
+  {const ob=$('oob');if(G.oobT>3){ob.hidden=false;ob.innerHTML='Off course · back on the line in <b>'+Math.ceil(12-G.oobT)+'s</b> · follow the arrow';}else ob.hidden=true;}
   $('prog').style.width=(G.s/FINISH_S*100).toFixed(1)+'%';$('dist').textContent=Math.max(0,Math.round(FINISH_S-G.s))+' m to gate';
-  $('speed').textContent=Math.round(G.speed*1.5);$('boostFill').style.width=(G.boost*100)+'%';
+  $('speed').textContent=Math.round(G.speed*G.flow*1.5);$('boostFill').style.width=(G.boost*100)+'%';
   const ready=G.boost>=0.33,bl=$('boostLbl');bl.classList.toggle('ready',ready);
   bl.textContent=G.boostT>0?'Boosting':ready?(isTouch?'Boost ready · double-tap':'Boost ready · Space'):'Boost';
 }
@@ -1073,12 +1140,14 @@ const remote={active:false,L:0,R:0,tl:false,tr:false,mode:'two'};
 /* ================= flow ================= */
 function showOnly(id){for(const o of ['startScreen','pauseScreen','endScreen','tutDone','raceLobby','raceEnd'])$(o).hidden=o!==id;}
 function syncSettingsUI(){$('fppBox').checked=settings.view==='fp';$('viewBtn').textContent=settings.view==='fp'?'3RD':'FPP';$('viewBtn').setAttribute('aria-label',settings.view==='fp'?'Switch to third-person view':'Switch to first-person view');
-  for(const b of document.querySelectorAll('.trackcard'))b.setAttribute('aria-pressed',String(b.dataset.track===TRACK));$('trackEyebrow').textContent=TRACK_NAME[TRACK];$('trackName').textContent=TRACK_NAME[TRACK];$('curChip').textContent=TRACK==='coaster'?'ON THE RAIL':'IN THE CURRENT';$('invertPitch').checked=$('invertPitch2').checked=settings.invert;$('sens').value=$('sens2').value=settings.sens;
+  for(const b of document.querySelectorAll('.trackcard'))b.setAttribute('aria-pressed',String(b.dataset.track===TRACK));$('trackEyebrow').textContent=TRACK_NAME[TRACK];$('trackName').textContent=TRACK_NAME[TRACK];$('curChip').textContent=TRACK==='coaster'?'ON THE RAIL':'ON THE LINE';$('invertPitch').checked=$('invertPitch2').checked=settings.invert;$('sens').value=$('sens2').value=settings.sens;
   for(const b of $('modeSeg').querySelectorAll('button'))b.setAttribute('aria-pressed',String(b.dataset.mode===settings.mode));
+  for(const id of ['guideSeg','guideSeg2'])for(const b of $(id).querySelectorAll('button'))b.setAttribute('aria-pressed',String(b.dataset.guide===settings.guide));
   
   $('ctlNote').textContent=settings.mode==='two'?'Phone: two thumbs, each one moves an arm. Most control.':'Phone: one thumb, drag up, down and sideways. Easiest to pick up.';}
 for(const id of ['invertPitch','invertPitch2'])$(id).addEventListener('change',e=>{settings.invert=e.target.checked;store.set('invert',settings.invert);syncSettingsUI();});
 for(const id of ['sens','sens2'])$(id).addEventListener('input',e=>{settings.sens=parseFloat(e.target.value);store.set('sens',settings.sens);syncSettingsUI();});
+for(const id of ['guideSeg','guideSeg2'])for(const b of $(id).querySelectorAll('button'))b.onclick=()=>{settings.guide=b.dataset.guide;store.set('guide',settings.guide);syncSettingsUI();shareLevel();};
 for(const b of $('modeSeg').querySelectorAll('button'))b.onclick=()=>{settings.mode=b.dataset.mode;store.set('mode',settings.mode);touches.clear();syncSettingsUI();};
 function updateTutBadge(){const done=store.get('tutDone',false);$('tutBadge').hidden=done;$('tutBtn').classList.toggle('primary',!done);$('startBtn').classList.toggle('primary',done);}
 function setView(v){settings.view=v;store.set('view',v);syncSettingsUI();toast(v==='fp'?'First-person view':'Third-person view','good');}
@@ -1090,7 +1159,7 @@ for(const b of document.querySelectorAll('.trackcard'))b.onclick=()=>{if(G.state
 window.addEventListener('keydown',e=>{if(e.repeat)return;if(e.key==='v'||e.key==='V'){setView(settings.view==='fp'?'3p':'fp');}});
 syncSettingsUI();updateTutBadge();
 
-function resetRun(){Object.assign(G,{state:'play',score:0,combo:0,comboT:0,gems:0,rings:0,crashes:0,boost:0.34,boostT:0,crashT:0,invuln:1,time:0,speed:72,bumpT:0,armL:0,armR:0,yawRate:0,pitchRate:0,gust:0,oobT:0,rescueT:0,inThermal:false,progS:30,progT:0});thermals.forEach(t=>t.hit=false);$('fadeB').classList.remove('on');
+function resetRun(){Object.assign(G,{state:'play',score:0,combo:0,comboT:0,gems:0,rings:0,crashes:0,boost:0.34,boostT:0,crashT:0,invuln:1,time:0,speed:72,bumpT:0,armL:0,armR:0,yawRate:0,pitchRate:0,gust:0,oobT:0,rescueT:0,inThermal:false,progS:30,progT:0,lock:0,onLine:0,flow:1,lineOff:0});thermals.forEach(t=>t.hit=false);$('fadeB').classList.remove('on');
   placeAt(30,48);updateCamera(0,true);}
 function goFull(){if(!isTouch)return;try{const el=document.documentElement;if(el.requestFullscreen&&!document.fullscreenElement)el.requestFullscreen().then(()=>{try{screen.orientation.lock('landscape').catch(()=>{});}catch(e){}}).catch(()=>{});}catch(e){}}
 function start(){if(RACE){openLobby();return;}if(needCam())return;initAudio();if(actx&&actx.state==='suspended')actx.resume().catch(()=>{});G.mode='main';resetRun();
@@ -1127,6 +1196,7 @@ function syncLobby(){
     const ul=$('rPlayers');ul.innerHTML='';const list=[...room.players.values()].sort((a,b)=>a.t-b.t);
     for(const p of list){const li=document.createElement('li');const l=document.createElement('b');const dot=document.createElement('i');dot.style.background=p.color;l.append(dot,p.name+(p.id===room.me.id?' (you)':''));
       const r=document.createElement('span');r.textContent=p.host?'host':'';li.append(l,r);ul.append(li);}
+    {const h=[...room.players.values()].find(p=>p.host),lv=room.isHost?settings.guide:h&&h.lvl;$('rGuide').textContent='Guide level for this race: '+(GUIDE[lv]?GUIDE[lv].name:'the host’s')+(room.isHost?' (yours; everyone in the room flies with it. Change it on the start screen.)':' (the host’s choice)');}
     $('rStart').hidden=!room.isHost;$('rStart').textContent=list.length>1?'Start race for everyone':'Start race';
     if(!room.isHost)$('rMsg').textContent='Waiting for the host to start the race.';}
 }
@@ -1142,7 +1212,9 @@ function syncRaceEnd(){
   $('reLobby').hidden=!multi;
 }
 onRoomChange(()=>{if(!$('raceLobby').hidden)syncLobby();syncRaceEnd();});
-onRaceStart(()=>{if(RACE)beginRace(false);});
+onRaceStart(pl=>{G.raceLvl=pl&&GUIDE[pl.lvl]?pl.lvl:'';if(RACE)beginRace(false);});
+function shareLevel(){setMyLevel(settings.guide);}
+shareLevel();   // so the lobby can show the host's level before the race starts
 function beginRace(solo){
   initAudio();if(actx&&actx.state==='suspended')actx.resume().catch(()=>{});
   $('camSetup').hidden=true;$('phoneSetup').hidden=true;
@@ -1163,11 +1235,11 @@ $('rCreate').onclick=()=>{store.set('name',$('rName').value.trim()||myName());jo
 $('rJoin').onclick=()=>{const c=cleanCode($('rCode').value);if(c.length<3){$('rMsg').textContent='Type the room code your friend sees on their screen.';return;}store.set('name',$('rName').value.trim()||myName());joinRoom(c,myName());};
 $('rCode').addEventListener('keydown',e=>{if(e.key==='Enter'){e.stopPropagation();$('rJoin').click();}});
 $('rSolo').onclick=$('rSolo2').onclick=()=>beginRace(true);
-$('rStart').onclick=()=>{if(!room.isHost)return;startRace();beginRace(false);};
+$('rStart').onclick=()=>{if(!room.isHost)return;G.raceLvl=settings.guide;startRace({lvl:settings.guide});beginRace(false);};
 $('rLeave').onclick=()=>{leaveRoom();syncLobby();};
 $('rCopy').onclick=()=>{try{navigator.clipboard.writeText(roomLink()).then(()=>toast('Link copied','good'));}catch(e){}};
 $('rBack').onclick=()=>toMenu();
-$('reAgain').onclick=()=>{if(G.solo||room.status!=='in'){beginRace(true);return;}if(room.isHost){startRace();beginRace(false);}};
+$('reAgain').onclick=()=>{if(G.solo||room.status!=='in'){beginRace(true);return;}if(room.isHost){G.raceLvl=settings.guide;startRace({lvl:settings.guide});beginRace(false);}};
 $('reLobby').onclick=()=>openLobby();$('reMenu').onclick=()=>toMenu();
 // ghosts: the other racers, see-through, with name tags
 const ghosts=new Map();
@@ -1194,7 +1266,7 @@ function updateRaceNet(now){
 }
 if(RACE){$('tutBtn').hidden=true;$('startBtn').querySelector('strong').textContent='Race Razorback Canyon';
   $('startBtn').querySelector('span').textContent='Make a room and send friends the link, or practise alone. Fly through every gate: each one missed costs 3 seconds.';
-  document.querySelector('#startScreen .lede').textContent='A tight, twisting canyon of stone pillars and low arches. No gems, no current: just the fastest line through the gates to the finish.';}
+  document.querySelector('#startScreen .lede').textContent='A tight, twisting canyon of stone pillars and low arches. No gems: follow the glowing line through every gate to the finish, as fast as you can.';}
 if(ROOM_PARAM){joinRoom(ROOM_PARAM,myName());openLobby();}   // join straight away, even if the controls need setting up first
 
 /* ================= control picker & camera control ================= */
@@ -1309,4 +1381,6 @@ function loop(now){requestAnimationFrame(loop);let dt=(now-last)/1000;last=now;i
     if(G.state==='play'&&fps<50){lowCount++;if(lowCount>=2&&stepQuality(fps))lowCount=0;}else lowCount=0;
   }}
 resize();placeAt(30,48);updateCamera(0,true);requestAnimationFrame(loop);
+// ?debug: test hook for test/guide-sim.cjs (steps the flight without drawing)
+if(/[?&]debug\b/.test(location.search))window.__game={scene,ribbonMat,guideLevel,G,update,settings,start,beginRace,routePoint,LEN,FINISH_S,GUIDE,snapCam:()=>updateCamera(0,true)};
 })();

@@ -22,7 +22,7 @@
       <div class="subrow">
         <span class="chip mult" id="mult">x1</span>
         <span id="gemcount">0 gems</span>
-        <span class="chip cur" id="curChip" hidden>IN THE CURRENT</span>
+        <span class="chip cur" id="curChip" hidden>ON THE LINE</span>
         <span class="chip skim" id="thermChip" hidden>UPDRAFT</span>
         <span class="chip skim" id="skim" hidden>SKIMMING</span>
         <span class="chip slow" id="linkChip" hidden>PHONE ON SLOW LINK</span>
@@ -68,9 +68,9 @@
   <div class="card">
     <div class="eyebrow" id="trackEyebrow">Saffron Gorge</div>
     <h1>Flyer</h1>
-    <p class="lede">Leap off the ridge in your wingsuit and glide one long canyon at dusk. Ride the glowing wind current, gather gems, thread the gold rings, and reach the gate at the bottom.</p>
+    <p class="lede">Leap off the ridge in your wingsuit and glide one long canyon at dusk. Ride the glowing line, gather gems, thread the gold rings, and reach the gate at the bottom.</p>
     <div class="tracks" role="group" aria-label="Choose a track">
-      <button class="trackcard" data-track="gorge" aria-pressed="true"><span class="tn">Saffron Gorge</span><span class="td">The classic glide down the canyon, gathering gems along the current.</span></button>
+      <button class="trackcard" data-track="gorge" aria-pressed="true"><span class="tn">Saffron Gorge</span><span class="td">The classic glide down the canyon, gathering gems along the line.</span></button>
       <button class="trackcard" data-track="coaster" aria-pressed="false"><span class="tn">Skyline Coaster</span><span class="td">Ride a rail of wind through big drops and soaring climbs.</span></button>
       <button class="trackcard" data-track="race" aria-pressed="false"><span class="tn">Razorback Canyon <span class="badge new">Race</span></span><span class="td">Race friends through a tight canyon: gates, pillars, low arches.</span></button>
     </div>
@@ -84,13 +84,14 @@
     </div>
     <div class="small" id="ctlHelp"></div>
     <div class="choices">
-      <button class="choice" id="tutBtn"><span class="badge" id="tutBadge">Recommended first</span><strong>Learn to fly</strong><span>A short guided lesson: dive, climb, turn, ride the current, boost.</span></button>
-      <button class="choice" id="startBtn"><strong>Glide the gorge</strong><span>The full run. About a minute and a half of flying.</span></button>
+      <button class="choice" id="tutBtn"><span class="badge" id="tutBadge">Recommended first</span><strong>Learn to fly</strong><span>A short guided lesson: dive, climb, turn, ride the line, boost.</span></button>
+      <button class="choice" id="startBtn"><strong>Glide the gorge</strong><span>The full run. About a minute of flying.</span></button>
     </div>
     <div class="settings">
       <span id="modeRow" class="rowinline"><span class="small">Thumbs</span><span class="seg" id="modeSeg" role="group" aria-label="Touch controls">
         <button data-mode="two" aria-pressed="true">Two thumbs</button><button data-mode="one" aria-pressed="false">One thumb</button>
       </span></span>
+      <span class="rowinline"><span class="small">Guide</span><span class="seg" id="guideSeg" role="group" aria-label="How much the line helps"><button data-guide="easy" aria-pressed="true">Easy</button><button data-guide="normal" aria-pressed="false">Normal</button><button data-guide="pro" aria-pressed="false">Pro</button></span></span>
       <label><input type="checkbox" id="fppBox"> First-person view</label>
       <label><input type="checkbox" id="invertPitch"> Invert climb / dive</label>
       <label>Sensitivity <input type="range" id="sens" min="0.6" max="1.6" step="0.05" value="1"></label>
@@ -105,6 +106,7 @@
     <h2>Catch your breath</h2>
     <p class="small" id="pauseNote"></p>
     <div class="settings">
+      <span class="rowinline"><span class="small">Guide</span><span class="seg" id="guideSeg2" role="group" aria-label="How much the line helps"><button data-guide="easy" aria-pressed="true">Easy</button><button data-guide="normal" aria-pressed="false">Normal</button><button data-guide="pro" aria-pressed="false">Pro</button></span></span>
       <label><input type="checkbox" id="invertPitch2"> Invert climb / dive</label>
       <label>Sensitivity <input type="range" id="sens2" min="0.6" max="1.6" step="0.05" value="1"></label>
     </div>
@@ -120,7 +122,7 @@
   <div class="card">
     <div class="eyebrow">Lessons complete</div>
     <h2>You're ready to glide</h2>
-    <p class="lede">You have every move you need. The glowing current always shows the best line through the gorge.</p>
+    <p class="lede">You have every move you need. The glowing ribbon always shows the line. Roughly match its bends and dips and it carries you; pick how much it helps under Guide.</p>
     <div class="actions">
       <button class="primary-btn" id="tdGo">Glide the gorge</button>
       <button class="secondary" id="tdAgain">Practice again</button>
@@ -171,6 +173,7 @@
         </div>
       </div>
       <ul class="rplayers" id="rPlayers"></ul>
+      <p class="small" id="rGuide"></p>
       <div class="actions">
         <button class="primary-btn" id="rStart">Start race</button>
         <button class="secondary" id="rSolo2">Practise alone</button>

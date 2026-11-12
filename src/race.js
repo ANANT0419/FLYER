@@ -59,7 +59,7 @@ export async function joinRoom(code, name) {
     ch = sb.channel('flyer-race-' + room.code, { config: { broadcast: { self: false, ack: false }, presence: { key: room.me.id } } });
     ch.on('presence', { event: 'sync' }, () => {
       const state = ch.presenceState(), here = new Set();
-      for (const id in state) { const meta = state[id][0] || {}; here.add(id); const p = player(id); p.name = String(meta.name || 'Flyer').slice(0, 16); p.t = +meta.t || Infinity; }
+      for (const id in state) { const meta = state[id][0] || {}; here.add(id); const p = player(id); p.name = String(meta.name || 'Flyer').slice(0, 16); p.t = +meta.t || Infinity; p.lvl = String(meta.lvl || ''); }
       for (const id of [...room.players.keys()]) if (!here.has(id)) room.players.delete(id);
       pickHost(); emit('change');
     });
@@ -74,7 +74,7 @@ export async function joinRoom(code, name) {
     const ok = await new Promise(resolve => {
       const to = setTimeout(() => resolve(false), 12000);
       ch.subscribe(async st => {
-        if (st === 'SUBSCRIBED') { clearTimeout(to); try { await ch.track({ name: room.me.name, t: joinedAt }); } catch (_) {} resolve(true); }
+        if (st === 'SUBSCRIBED') { clearTimeout(to); try { await ch.track({ name: room.me.name, t: joinedAt, lvl: myLvl }); } catch (_) {} resolve(true); }
         else if (st === 'CHANNEL_ERROR' || st === 'TIMED_OUT') { clearTimeout(to); resolve(false); }
       });
     });
@@ -90,15 +90,18 @@ export function leaveRoom() {
   try { if (sb && ch) sb.removeChannel(ch); } catch (_) {}
   sb = null; ch = null; room.status = 'off'; room.code = ''; room.players.clear(); room.results = []; room.isHost = false; emit('change');
 }
+let myLvl = '';
 export function setMyName(name) {
   room.me.name = String(name || 'Flyer').slice(0, 16);
-  if (ch && room.status === 'in') try { ch.track({ name: room.me.name, t: joinedAt }); } catch (_) {}
+  if (ch && room.status === 'in') try { ch.track({ name: room.me.name, t: joinedAt, lvl: myLvl }); } catch (_) {}
 }
+/** My guided-line level, shared through presence so the lobby can show the host's before the race starts. */
+export function setMyLevel(lvl) { myLvl = String(lvl || ''); setMyName(room.me.name); }
 const send = (event, payload) => { if (room.status === 'in') rtSend(ch, event, payload); };
 
 /** Host only: start a race for everyone in the room. Returns the start payload (the host starts too). */
-export function startRace() {
-  const payload = { rid: room.rid + 1, at: Date.now() };
+export function startRace(extra) {
+  const payload = { ...(extra || {}), rid: room.rid + 1, at: Date.now() };   // extra: e.g. the host's guide level
   room.rid = payload.rid; room.results = []; for (const p of room.players.values()) { p.fin = null; p.buf = []; p.st = null; }
   send('go', payload); setTimeout(() => send('go', payload), 400); emit('change'); return payload;   // sent twice in case one is lost
 }
