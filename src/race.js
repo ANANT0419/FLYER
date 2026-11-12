@@ -2,9 +2,10 @@
 //  - presence lists who is in the room; whoever has been in it longest is the host and starts races
 //  - broadcast carries the start signal, each racer's position about 10 times a second, and finish times
 // Racers pass through each other, so a little network delay never causes an unfair bump.
-import { RELAY_URL, RELAY_KEY } from './relay-config.js';
+// Positions go out 4 times a second (the service has a project-wide message limit shared with the phone relay).
+import { rtClient, rtReady, rtSend } from './rt.js';
 
-export const raceNetReady = !!(RELAY_URL && RELAY_KEY);
+export const raceNetReady = rtReady;
 const ABC = 'abcdefghjkmnpqrstuvwxyz23456789';
 export const newRoomCode = () => { let c = ''; for (let i = 0; i < 5; i++) c += ABC[Math.floor(Math.random() * ABC.length)]; return c; };
 export const cleanCode = c => String(c || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8);
@@ -53,8 +54,7 @@ export async function joinRoom(code, name) {
   room.players.clear(); room.results = []; room.rid = 0; emit('change');
   if (!raceNetReady) { room.status = 'error'; room.error = 'Race rooms are switched off in this build.'; emit('change'); return false; }
   try {
-    const { createClient } = await import('@supabase/supabase-js');
-    sb = createClient(RELAY_URL, RELAY_KEY, { auth: { persistSession: false }, realtime: { params: { eventsPerSecond: 30 } } });
+    sb = await rtClient();
     ch = sb.channel('flyer-race-' + room.code, { config: { broadcast: { self: false, ack: false }, presence: { key: room.me.id } } });
     ch.on('presence', { event: 'sync' }, () => {
       const state = ch.presenceState(), here = new Set();
@@ -62,7 +62,7 @@ export async function joinRoom(code, name) {
       for (const id of [...room.players.keys()]) if (!here.has(id)) room.players.delete(id);
       pickHost(); emit('change');
     });
-    ch.on('broadcast', { event: 'go' }, ({ payload }) => { if (!payload) return; room.rid = payload.rid; room.results = []; for (const p of room.players.values()) { p.fin = null; p.buf = []; p.st = null; } emit('start', payload); emit('change'); });
+    ch.on('broadcast', { event: 'go' }, ({ payload }) => { if (!payload || payload.rid === room.rid) return; room.rid = payload.rid; room.results = []; for (const p of room.players.values()) { p.fin = null; p.buf = []; p.st = null; } emit('start', payload); emit('change'); });
     ch.on('broadcast', { event: 'st' }, ({ payload: d }) => {
       if (!d || d.id === room.me.id) return; const p = player(d.id), now = performance.now();
       if (d.rid !== room.rid) return;
@@ -93,28 +93,28 @@ export function setMyName(name) {
   room.me.name = String(name || 'Flyer').slice(0, 16);
   if (ch && room.status === 'in') try { ch.track({ name: room.me.name, t: joinedAt }); } catch (_) {}
 }
-const send = (event, payload) => { if (ch && room.status === 'in') try { ch.send({ type: 'broadcast', event, payload }); } catch (_) {} };
+const send = (event, payload) => { if (room.status === 'in') rtSend(ch, event, payload); };
 
 /** Host only: start a race for everyone in the room. Returns the start payload (the host starts too). */
 export function startRace() {
   const payload = { rid: room.rid + 1, at: Date.now() };
   room.rid = payload.rid; room.results = []; for (const p of room.players.values()) { p.fin = null; p.buf = []; p.st = null; }
-  send('go', payload); emit('change'); return payload;
+  send('go', payload); setTimeout(() => send('go', payload), 400); emit('change'); return payload;   // sent twice in case one is lost
 }
 let lastSend = 0;
-/** Share where I am. Call every frame; it sends about 10 times a second. */
+/** Share where I am. Call every frame; it sends 4 times a second. */
 export function sendState(now, s) {
-  if (room.status !== 'in' || now - lastSend < 95) return; lastSend = now;
+  if (room.status !== 'in' || now - lastSend < 245) return; lastSend = now;
   send('st', { id: room.me.id, rid: room.rid, p: s.p.map(v => Math.round(v * 10) / 10), a: s.a.map(v => Math.round(v * 100) / 100), s: Math.round(s.s), arm: s.arm, done: !!s.done });
 }
 export function sendFinish(time, pen) {
   addResult(room.me.id, room.me.name, time, pen);
-  send('fin', { id: room.me.id, rid: room.rid, name: room.me.name, time, pen });
+  const f = { id: room.me.id, rid: room.rid, name: room.me.name, time, pen }; send('fin', f); setTimeout(() => send('fin', f), 1500);
 }
-/** Where a racer was ~150 ms ago, smoothly between the messages received. Returns null if they have gone quiet. */
+/** Where a racer was ~320 ms ago (a little over one message gap), smoothly between the messages received. Returns null if they have gone quiet. */
 export function ghostPose(p, now) {
   if (!p.buf.length || now - p.seen > 3000) return null;
-  const t = now - 150, b = p.buf;
+  const t = now - 320, b = p.buf;
   if (t <= b[0][0]) return b[0][1];
   for (let i = b.length - 1; i > 0; i--) {
     if (b[i - 1][0] <= t) {

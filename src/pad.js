@@ -36,19 +36,21 @@ export function startPad(code) {
     curP = p; curR = r;
     sendTilt(false);   // send the moment the sensor reports, rather than waiting for the next beat
   }
-  // the direct link gets every sensor reading (up to ~100 a second); the relay, which is slower, at most 30 a second
-  let lastSent = 0;
+  // the direct link gets every sensor reading (up to ~100 a second). The relay shares a message limit with everyone
+  // playing (including race rooms), so it gets at most 15 a second, only when the tilt has changed, plus a slow heartbeat.
+  let lastSent = 0, sentP = 1e9, sentR = 1e9;
   function sendTilt(beatTick) {
     if (!gotSensor) return; const t = performance.now(), direct = conn && conn.open;
-    if (t - lastSent < (direct ? 8 : 33) || (beatTick && t - lastSent < 40)) return;
-    const m = [+curP.toFixed(2), +curR.toFixed(2)]; lastSent = t;
+    if (direct) { if (t - lastSent < 8 || (beatTick && t - lastSent < 40)) return; }
+    else { const moved = Math.abs(curP - sentP) > 0.4 || Math.abs(curR - sentR) > 0.4; if (t - lastSent < 66 || (!moved && t - lastSent < 300)) return; }
+    const m = [+curP.toFixed(2), +curR.toFixed(2)]; lastSent = t; sentP = curP; sentR = curR;
     if (direct) { try { conn.send(m); } catch (_) {} } else if (relayUp) relay.send(m);
   }
   // and a steady beat, so the big screen knows the phone is there even when it is held perfectly still
   setInterval(() => sendTilt(true), 50);
   const echo = d => { if (d && d.p) send({ q: d.p }); };
-  function connect() {
-    stat('Connecting…');
+  function connect(quiet) {
+    if (!quiet || !relayUp) stat('Connecting…');
     try { if (peer) peer.destroy(); } catch (_) {}
     peer = new Peer(peerOptions());
     peer.on('open', () => {
@@ -57,14 +59,17 @@ export function startPad(code) {
       conn.on('data', d => { echo(d); if (d && d.v && navigator.vibrate) try { navigator.vibrate(d.v); } catch (_) {} });
       conn.on('close', lost);
     });
-    peer.on('error', e => { if (up()) return; stat(e && e.type === 'peer-unavailable' ? 'Code not found. Open the phone glider screen on the big screen and scan again.' : 'Connection problem. Tap to retry.'); retry(); });
-    setTimeout(() => { if (!up()) { stat('Could not reach the big screen. Put the phone on the same Wi‑Fi as it, then tap to retry.'); retry(); } }, 14000);
+    peer.on('error', e => { if (up()) return; stat(e && e.type === 'peer-unavailable' ? 'Waiting for the big screen… (if this lasts, open the phone glider screen there and scan again)' : 'Connection problem. Retrying…'); retry(); });
+    setTimeout(() => { if (!up()) { stat('Could not reach the big screen yet. Still trying… (same Wi‑Fi as the screen helps)'); retry(); } }, 14000);
     // in parallel, the relay: works even when the two devices cannot see each other directly
     if (!relay) joinRelay(code, d => { if (!d) return; if (d.p) { if (!(conn && conn.open)) echo(d); } else if (d.k && !relayUp) { relayUp = true; if (!(conn && conn.open)) linked('relay'); } else if (d.v && navigator.vibrate) try { navigator.vibrate(d.v); } catch (_) {} })
       .then(r => { relay = r; if (!r) return; const hello = setInterval(() => { if (relayUp) clearInterval(hello); else r.send({ h: 1 }); }, 500); });
   }
-  function lost() { if (relayUp) { stat('Connected (relay)', true); return; } stat('Connection lost. Tap to reconnect.'); retry(); }
-  function retry() { $('padGo').hidden = false; $('padGo').textContent = 'Tap to reconnect'; $('padBoost').hidden = true; }
+  function lost() { if (relayUp) { stat('Connected (relay)', true); autoRetry(); return; } stat('Connection lost. Reconnecting…'); retry(); }
+  function retry() { $('padGo').hidden = false; $('padGo').textContent = 'Tap to reconnect'; $('padBoost').hidden = true; autoRetry(); }
+  // keep trying by itself (the big screen may just be reloading, for example when switching to the race canyon)
+  let retryT = 0;
+  function autoRetry() { if (retryT || !started) return; retryT = setTimeout(() => { retryT = 0; if (!(conn && conn.open)) connect(true); }, relayUp ? 20000 : 3000); }   // on the relay, only try the direct link now and then
 
   $('padGo').onclick = async () => {
     if (!started) {

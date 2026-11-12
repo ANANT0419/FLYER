@@ -32,7 +32,7 @@ function onData(d, viaRelay) {
   if (Array.isArray(d)) {
     const t = performance.now(), p = +d[0] || 0, r = +d[1] || 0, gap = Math.max(0.008, (t - lastMsg) / 1000);
     // how fast the tilt is changing, so the screen can run slightly ahead between messages instead of trailing them
-    if (lastMsg && gap < 0.15) { vp += ((p - phone.pitch) / gap - vp) * 0.5; vr += ((r - phone.roll) / gap - vr) * 0.5; } else { vp = vr = 0; }
+    if (lastMsg && gap < 0.35) { vp += ((p - phone.pitch) / gap - vp) * 0.5; vr += ((r - phone.roll) / gap - vr) * 0.5; } else { vp = vr = 0; }
     phone.pitch = p; phone.roll = r; lastMsg = t; phone.via = conn && conn.open ? 'direct' : 'relay';
   }
   else if (d.q) { const rtt = performance.now() - d.q; if (rtt >= 0 && rtt < 5000) phone.ms = phone.ms ? phone.ms * 0.7 + rtt / 2 * 0.3 : rtt / 2; }
@@ -46,14 +46,22 @@ export function setPhoneSens(v) { phone.sens = clamp(+v || 1, 0.6, 1.6); save('p
 function toPhone(d) { if (conn && conn.open) try { conn.send(d); } catch (_) {} else if (relay && relayAcked) relay.send(d); }
 export function phoneBuzz(pattern) { toPhone({ v: pattern }); }
 
+// the pairing code survives a reload of this tab (switching to the race canyon reloads), so a paired phone reconnects by itself
+const savedCode = () => { try { return sessionStorage.getItem('flyer.padCode') || ''; } catch (_) { return ''; } };
+const keepCode = c => { try { if (c) sessionStorage.setItem('flyer.padCode', c); else sessionStorage.removeItem('flyer.padCode'); } catch (_) {} };
+export const phoneWasPaired = () => !!savedCode();
 export function hostPhone() {
   if (peer && !peer.destroyed) return;
-  const abc = 'abcdefghjkmnpqrstuvwxyz23456789'; let code = ''; for (let i = 0; i < 5; i++) code += abc[Math.floor(Math.random() * abc.length)];
+  const abc = 'abcdefghjkmnpqrstuvwxyz23456789'; let code = savedCode(); if (!code) for (let i = 0; i < 5; i++) code += abc[Math.floor(Math.random() * abc.length)];
+  keepCode(code);
   phone.code = code; phone.status = 'starting'; phone.error = '';
   const u = new URL(location.href); u.search = ''; u.hash = ''; u.searchParams.set('pad', code);
   const sig = new URLSearchParams(location.search).get('sig'); if (sig) u.searchParams.set('sig', sig);
   phone.url = u.toString();
   relayAcked = false; joinRelay(code, d => onData(d, true)).then(r => { if (phone.code !== code) { if (r) r.close(); return; } relay = r; if (r && phone.status !== 'connected') phone.status = 'waiting'; });
+  startPeer(code);
+}
+function startPeer(code) {
   peer = new Peer(padId(code), peerOptions());
   peer.on('open', () => { if (phone.status === 'starting') phone.status = 'waiting'; });
   peer.on('connection', c => {
@@ -65,19 +73,21 @@ export function hostPhone() {
   });
   peer.on('disconnected', () => { try { peer.reconnect(); } catch (_) {} });
   peer.on('error', e => {
+    // just after a reload the introduction server may still hold this code for the old page: try again shortly
+    if (e && e.type === 'unavailable-id') { const p = peer; setTimeout(() => { if (peer === p && phone.code === code) { try { p.destroy(); } catch (_) {} startPeer(code); } }, 4000); return; }
     if (phone.status === 'connected' || relay) return;   // a live link, or the relay, carries on without the introduction server
     phone.status = 'error'; phone.error = 'Could not set up the phone link (' + (e && e.type ? e.type : e) + '). Check the internet connection and try again.';
   });
 }
-export function stopPhone() { try { if (peer) peer.destroy(); } catch (_) {} if (relay) relay.close(); relay = null; relayAcked = false; phone.code = ''; peer = null; conn = null; phone.status = 'off'; phone.ms = 0; phone.via = ''; phone.live = false; phone.L = phone.R = 0; }
+export function stopPhone() { keepCode(''); try { if (peer) peer.destroy(); } catch (_) {} if (relay) relay.close(); relay = null; relayAcked = false; phone.code = ''; peer = null; conn = null; phone.status = 'off'; phone.ms = 0; phone.via = ''; phone.live = false; phone.L = phone.R = 0; }
 
 /** Call once per frame. */
 export function updatePhone(now) {
   const dt = Math.min(0.1, lastT ? (now - lastT) / 1000 : 0.016); lastT = now;
   phone.live = phone.status === 'connected' && now - lastMsg < 600;
-  if (phone.status === 'connected' && now - lastPing > 1000) { lastPing = now; toPhone({ p: now }); }   // measures the delay, shown on the setup screen
+  if (phone.status === 'connected' && now - lastPing > (phone.via === 'relay' ? 3000 : 1000)) { lastPing = now; toPhone({ p: now }); }   // measures the delay, shown on the setup screen
   // aim a little ahead along the current motion (at most 50 ms), then glide there: hides the gaps between messages without trailing them
-  const age = Math.min(0.05, (now - lastMsg) / 1000), lead = phone.live ? 1 : 0;
+  const age = Math.min(phone.via === 'relay' ? 0.08 : 0.05, (now - lastMsg) / 1000), lead = phone.live ? 1 : 0;
   const tp = phone.live ? phone.pitch + vp * age * lead : 0, tr = phone.live ? phone.roll + vr * age * lead : 0;
   const g = 1 - Math.exp(-dt * (phone.live ? 55 : 6));   // ease to level if the messages stop
   sp += (tp - sp) * g; sr += (tr - sr) * g;

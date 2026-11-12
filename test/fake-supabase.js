@@ -13,7 +13,8 @@ export function createClient() {
       };
       const ch = {
         on(type, filter, cb) { handlers.push({ type, event: filter.event, cb }); return ch; },
-        subscribe(cb) { setTimeout(() => cb('SUBSCRIBED'), 50); return ch; },
+        state: 'closed',
+        subscribe(cb) { setTimeout(() => { ch.state = 'joined'; cb('SUBSCRIBED'); }, 50); return ch; },
         async track(meta) { myMeta = meta; pres[me] = [meta]; sync(); bc.postMessage({ k: 'p', key: me, meta }); },
         untrack() { bc.postMessage({ k: 'leave', key: me }); },
         presenceState() { return pres; },

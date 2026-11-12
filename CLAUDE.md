@@ -14,6 +14,8 @@ Wingsuit gliding game (three.js r128 + Vite). Live at https://flyer-aspiring-yog
 - Phone glider: direct WebRTC via public PeerJS, Supabase Realtime relay fallback (project `flyer`, ap-south-1). Owner confirmed it connects; reported lag and that the setup screen's move list never ticked. Fixed: list ticks, tilt sent per sensor reading, screen leads slightly between messages, delay shown on setup screen. Not yet re-tested by the owner.
 - Open-palm camera mode is new and untested on a real camera. The flat-hand mode was reported jittery.
 - Terrain: cliffs with ledges, rim crags, ridged mountain ranges (replaced the cone mountains). `?view=sky` for an overhead check.
+- Message budget: the Supabase free plan allows ~100 Realtime messages/s for the whole project. The owner's first live race hit it ("MessagePerSecondRateLimitReached", 429s in realtime logs) and phone tilt on the relay was dropped. Now: one shared client per page (`src/rt.js`), nothing sent while disconnected (no REST fallback), relay tilt ≤15/s and only on change, race positions 4/s. Check `realtime_logs` with the Supabase MCP if races stutter again; upgrading the plan or moving race traffic peer-to-peer are the next steps.
+- Phone pairing code is kept in sessionStorage, so switching to the race canyon (a page reload) keeps the phone; the phone retries by itself.
 - Racing: Razorback Canyon (`RACE` in game.js, chosen at page load; `?room=CODE` joins a room). Rooms in `src/race.js` on the Supabase project. Owner's choices: room code/link, +3 s per missed gate, a new tight canyon, racers pass through each other. Tested with two tabs against `test/fake-supabase.js`; never tested against the real Supabase service (the cloud sandbox cannot reach supabase.co).
 
 ## Queue

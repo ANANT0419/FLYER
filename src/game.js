@@ -2,8 +2,9 @@
 import * as THREE from 'three';
 import {hand,enableHand,disableHand,updateHand,onFist,attachCanvas,requestCalibration,setCamMode,beginRangeLearning,commitRangeLearning,resetHandRange,setHandSens} from './hand.js';
 import {createPost} from './post.js';
-import {phone,hostPhone,stopPhone,updatePhone,onPhoneBoost,phoneBuzz,setPhoneSens} from './link.js';
+import {phone,hostPhone,stopPhone,updatePhone,onPhoneBoost,phoneBuzz,setPhoneSens,phoneWasPaired} from './link.js';
 import QRCode from 'qrcode';
+import {rtStats} from './rt.js';
 import {room,joinRoom,leaveRoom,setMyName,startRace,sendState,sendFinish,onRaceStart,onRoomChange,ghostPose,newRoomCode,cleanCode} from './race.js';
 (function(){
 "use strict";
@@ -1071,7 +1072,7 @@ function setView(v){settings.view=v;store.set('view',v);syncSettingsUI();toast(v
 $('viewBtn').onclick=()=>setView(settings.view==='fp'?'3p':'fp');
 $('fppBox').addEventListener('change',e=>{settings.view=e.target.checked?'fp':'3p';store.set('view',settings.view);syncSettingsUI();});
 for(const b of document.querySelectorAll('.trackcard'))b.onclick=()=>{if(G.state!=='menu'||TRACK===b.dataset.track)return;
-  if(b.dataset.track==='race'||RACE){store.set('track',b.dataset.track);location.href=location.pathname;return;}   // the race canyon is a different world: reload into it
+  if(b.dataset.track==='race'||RACE){store.set('track',b.dataset.track);const u=new URL(location.href);u.searchParams.delete('room');location.href=u.toString();return;}   // the race canyon is a different world: reload into it
   TRACK=b.dataset.track;store.set('track',TRACK);buildTrack();best=store.get(bestKey(),0);syncSettingsUI();};
 window.addEventListener('keydown',e=>{if(e.repeat)return;if(e.key==='v'||e.key==='V'){setView(settings.view==='fp'?'3p':'fp');}});
 syncSettingsUI();updateTutBadge();
@@ -1165,10 +1166,12 @@ function makeGhost(p){const grp=new THREE.Group();const mat=new THREE.MeshBasicM
   g.fillStyle='rgba(13,16,32,.55)';const tw=Math.min(250,g.measureText(p.name).width+28);g.fillRect(128-tw/2,8,tw,48);g.fillStyle=p.color;g.fillText(p.name,128,33);
   const tag=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(c),transparent:true,depthWrite:false,depthTest:false}));tag.scale.set(4.4,1.1,1);tag.position.y=2.3;grp.add(tag);
   grp.scale.setScalar(1.485);scene.add(grp);return {grp,name:p.name};}
+let rtLimitedSeen=0,rtWarned=false;
 function updateRaceNet(now){
   if(!RACE)return;
   if(G.state==='count'){countdown(now);updateHUD();}
   const racing=G.mode==='race'&&!G.solo&&room.status==='in';
+  if(rtStats.limited>rtLimitedSeen){rtLimitedSeen=rtStats.limited;if(!rtWarned){rtWarned=true;logIssue('Race server','The race server refused messages because too many were sent at once (free plan limit). Positions or phone tilt may stutter. Phones on the same Wi‑Fi as their screen use the direct link and avoid this.');}}
   if(racing&&(G.state==='play'||G.state==='count'||G.state==='end'||G.state==='paused'))sendState(now,{p:[G.pos.x,G.pos.y,G.pos.z],a:[G.pitch,G.yaw,G.roll],s:G.s,done:G.state==='end'});
   const seen=new Set();
   if(racing&&G.state!=='menu')for(const p of room.players.values()){if(p.id===room.me.id)continue;const pose=ghostPose(p,now);if(!pose||pose.done)continue;seen.add(p.id);
@@ -1204,7 +1207,7 @@ function openCamSetup(){for(const k in ck)ck[k]=false;$('camSetup').hidden=false
 function closeCamSetup(use){$('camSetup').hidden=true;
   if(use&&hand.status==='ready'){commitRangeLearning();settings.control='camera';store.set('control','camera');lastInput='remote';}
   else{disableHand();settings.control=camPrev;store.set('control',camPrev);}
-  syncControlUI();}
+  syncControlUI();if(RACE&&use&&G.state==='menu')openLobby();}
 for(const b of document.querySelectorAll('.ctlcard'))b.onclick=()=>{if(G.state==='menu')setControl(b.dataset.ctl);};
 $('camDone').onclick=()=>closeCamSetup(true);$('camCancel').onclick=()=>closeCamSetup(false);$('camRecalBtn').onclick=()=>{resetHandRange();beginRangeLearning();for(const k in ck)ck[k]=false;requestCalibration();};
 $('handSens').addEventListener('input',e=>setHandSens(e.target.value));
@@ -1223,7 +1226,7 @@ function openPhoneSetup(){if(hand.enabled||hand.status!=='off')disableHand();for
 function closePhoneSetup(use){$('phoneSetup').hidden=true;
   if(use&&phone.status==='connected'){settings.control='phone';store.set('control','phone');lastInput='remote';}
   else{stopPhone();settings.control=camPrev;store.set('control',camPrev);}
-  syncControlUI();}
+  syncControlUI();if(RACE&&use&&G.state==='menu')openLobby();}
 $('padDone').onclick=()=>closePhoneSetup(true);$('padCancel').onclick=()=>closePhoneSetup(false);$('padSens').addEventListener('input',e=>setPhoneSens(e.target.value));
 onPhoneBoost(()=>{if(!$('phoneSetup').hidden)pk.Tap=true;if(G.state==='play')tryBoost();});
 let padLostSince=0,padSlowLogged=false;
@@ -1268,6 +1271,8 @@ function handHud(now){
       if(lost>3.5){pause();$('pauseNote').textContent='Paused because the camera lost sight of your hand. Bring it back into view and resume.';}}
   }
 }
+// a phone paired before this tab reloaded (e.g. switching to the race canyon) reconnects by itself
+if(settings.control==='phone'&&phoneWasPaired())hostPhone();
 syncControlUI();
 
 /* ================= loop ================= */
