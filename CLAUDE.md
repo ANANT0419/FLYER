@@ -10,12 +10,13 @@ Wingsuit gliding game (three.js r128 + Vite). Live at https://flyer-aspiring-yog
 - Explain in plain language; the owner is not a programmer.
 
 ## State
-- Controls: arrow keys, mouse, two arms, touch, phone glider (`src/link.js`, `src/pad.js`, relay in `src/relay.js`), camera with bare hand or any object (`src/hand.js`, `src/objtrack.js`).
-- Phone glider: direct WebRTC via public PeerJS, with a Supabase Realtime relay fallback (project `flyer`, ap-south-1). The relay has never been tested against the real service.
-- Bare-hand tracking (hand flat, fingertips toward the screen) was reported jittery; reworked once, not yet re-tested by the owner.
-- Any-object tracking and the relay are untested on real hardware.
+- Controls: arrow keys, mouse, two arms, touch, phone glider (`src/link.js`, `src/pad.js`, relay in `src/relay.js`), camera with open palm (default), flat hand or any object (`src/hand.js`, `src/objtrack.js`).
+- Phone glider: direct WebRTC via public PeerJS, Supabase Realtime relay fallback (project `flyer`, ap-south-1). Owner confirmed it connects; reported lag and that the setup screen's move list never ticked. Fixed: list ticks, tilt sent per sensor reading, screen leads slightly between messages, delay shown on setup screen. Not yet re-tested by the owner.
+- Open-palm camera mode is new and untested on a real camera. The flat-hand mode was reported jittery.
+- Terrain: cliffs with ledges, rim crags, ridged mountain ranges (replaced the cone mountains). `?view=sky` for an overhead check.
+- Racing: Razorback Canyon (`RACE` in game.js, chosen at page load; `?room=CODE` joins a room). Rooms in `src/race.js` on the Supabase project. Owner's choices: room code/link, +3 s per missed gate, a new tight canyon, racers pass through each other. Tested with two tabs against `test/fake-supabase.js`; never tested against the real Supabase service (the cloud sandbox cannot reach supabase.co).
 
 ## Queue
-1. Fix whatever the owner's playtest of phone glider, relay and object tracking turns up.
-2. A live tuning panel for camera and phone control (smoothing, dead zone, reach, curve) so feel can be tuned in seconds.
-3. Visuals, in this order: terrain and cliffs, trees and meadows, water, pilot.
+1. Owner playtest: race with friends on the real service, phone lag, open-palm camera mode.
+2. A live tuning panel for camera and phone control (smoothing, dead zone, reach, curve).
+3. Visuals: trees and meadows, water, pilot. Maybe a race leaderboard that persists.

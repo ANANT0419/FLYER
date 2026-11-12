@@ -4,6 +4,7 @@ import {hand,enableHand,disableHand,updateHand,onFist,attachCanvas,requestCalibr
 import {createPost} from './post.js';
 import {phone,hostPhone,stopPhone,updatePhone,onPhoneBoost,phoneBuzz,setPhoneSens} from './link.js';
 import QRCode from 'qrcode';
+import {room,joinRoom,leaveRoom,setMyName,startRace,sendState,sendFinish,onRaceStart,onRoomChange,ghostPose,newRoomCode,cleanCode} from './race.js';
 (function(){
 "use strict";
 /* ================= issue log ================= */
@@ -38,6 +39,9 @@ if(typeof THREE==='undefined'){logIssue('Load','The 3D engine (three.js) did not
 const store={get(k,d){try{const v=localStorage.getItem('flyer.'+k);return v==null?d:JSON.parse(v)}catch(e){return d}},
              set(k,v){try{localStorage.setItem('flyer.'+k,JSON.stringify(v))}catch(e){}}};
 const hot=window.claude&&window.claude.hot;
+const ROOM_PARAM=new URLSearchParams(location.search).get('room');if(ROOM_PARAM)store.set('track','race');
+const RACE=store.get('track','gorge')==='race';   // the race canyon is a different gorge, so it is chosen when the page loads
+const WALL_D=RACE?58:92;                           // where the canyon walls start, metres from the middle
 const bestKey=()=>TRACK==='coaster'?'best.coaster':'best';let best=store.get('best',0);
 const isTouch=!!(window.matchMedia&&matchMedia('(pointer:coarse)').matches);let lastInput=isTouch?'touch':'keys';
 const settings={view:store.get('view','3p')==='fp'?'fp':'3p',invert:store.get('invert',false),sens:store.get('sens',1),mode:store.get('mode','two'),control:store.get('control',isTouch?'touch':'simple')};
@@ -86,7 +90,9 @@ function cloudTex(){const c=document.createElement('canvas');c.width=256;c.heigh
 
 /* ================= track ================= */
 const cps=[];
-for(let i=0;i<17;i++){const z=-i*420;const x=i<1?0:Math.sin(i*0.85)*165+Math.sin(i*0.31+1)*105-Math.sin(1)*105;const y=660-i*40+Math.sin(i*1.7)*16;cps.push(new THREE.Vector3(x,y,z));}
+if(RACE){const fx=i=>Math.sin(i*1.25)*95+Math.sin(i*0.55+2)*60;   // tighter, twistier, steeper than the classic gorge
+  for(let i=0;i<16;i++)cps.push(new THREE.Vector3(fx(i)-fx(0),660-i*44+Math.sin(i*1.9)*14,-i*290));}
+else for(let i=0;i<17;i++){const z=-i*420;const x=i<1?0:Math.sin(i*0.85)*165+Math.sin(i*0.31+1)*105-Math.sin(1)*105;const y=660-i*40+Math.sin(i*1.7)*16;cps.push(new THREE.Vector3(x,y,z));}
 const curve=new THREE.CatmullRomCurve3(cps,false,'catmullrom',0.5);
 const LEN=curve.getLength(),S=1600,STEP=LEN/(S-1);
 const C=[],T=[],R=[];const pts=curve.getSpacedPoints(S-1);
@@ -103,7 +109,7 @@ function vn(x,y){const xi=Math.floor(x),yi=Math.floor(y),xf=x-xi,yf=y-yi,u=xf*xf
 function ridged(x,y,oct){let sum=0,amp=0.5,f=1,w=1,norm=0;for(let o=0;o<oct;o++){let n=1-Math.abs(vn(x*f,y*f)*2-1);n*=n;n*=w;w=clamp(n*1.6,0,1);sum+=n*amp;norm+=amp;amp*=0.5;f*=2.03;}return sum/norm;}
 function nz(s,d){return Math.sin(s*0.011+d*0.017)*0.5+Math.sin(s*0.027-d*0.031+1.7)*0.3+Math.sin(s*0.061+d*0.05+4.1)*0.2;}
 function relH(s,d){const ad=Math.abs(d),n=nz(s,d);let h=ad*0.05+n*2.4+Math.sin(s*0.09+d*0.13)*0.6;if(ad<26){const t=ad/26;h-=7*(1-t*t);}
-  if(ad>92){const w=(ad-92)/150,side=d>0?1:-1;
+  if(ad>WALL_D){const w=(ad-WALL_D)/150,side=d>0?1:-1;
     // buttresses and gullies running down the walls, crags on top; each wall has its own pattern
     const rg=ridged(s*0.0065+side*31.7,ad*0.006,4),cr=vn(s*0.045+side*7.3,ad*0.05);
     const cliff=Math.min(1,w*2.6);                                   // a steep first rise: the canyon wall itself
@@ -116,16 +122,18 @@ function worldAt(s,d,h,out){frame(s);out.copy(_c).addScaledVector(_r,d);out.y=fl
 
 /* ---- the wind current: the ideal line ---- */
 const KS=300,keys=[];
-for(let i=0;i*KS<=LEN+KS*3;i++){if(i<2){keys.push({d:0,h:42});continue;}keys.push({d:rr(-48,48),h:rnd()<0.18?rr(13,17):rr(28,58)});}
+if(RACE){const kr=mulberry(5150);for(let i=0;i*KS<=LEN+KS*3;i++){if(i<2){keys.push({d:0,h:40});continue;}keys.push({d:(kr()*2-1)*30,h:kr()<0.3?12+kr()*6:20+kr()*30});}}
+else for(let i=0;i*KS<=LEN+KS*3;i++){if(i<2){keys.push({d:0,h:42});continue;}keys.push({d:rr(-48,48),h:rnd()<0.18?rr(13,17):rr(28,58)});}
 function cr(p0,p1,p2,p3,t){const t2=t*t,t3=t2*t;return 0.5*(2*p1+(-p0+p2)*t+(2*p0-5*p1+4*p2-p3)*t2+(-p0+3*p1-3*p2+p3)*t3);}
 let SD=0,SH=0;
 function streamAt(s){const f=clamp(s,0,LEN)/KS,i=Math.floor(f),t=f-i,k=j=>keys[clamp(j,0,keys.length-1)];
   SD=cr(k(i-1).d,k(i).d,k(i+1).d,k(i+2).d,t);SH=cr(k(i-1).h,k(i).h,k(i+1).h,k(i+2).h,t);if(TRACK==='coaster'){const f2=clamp(s,0,LEN)/KC,j=Math.floor(f2),t2=f2-j,kc=q=>keysC[clamp(q,0,keysC.length-1)];SH=cr(kc(j-1),kc(j),kc(j+1),kc(j+2),t2);}}
 const _sp=new THREE.Vector3(),_sp2=new THREE.Vector3();
 function streamPoint(s,out){streamAt(s);return worldAt(s,SD,SH,out);}
-const ARCH_S=[0.27,0.52,0.77].map(f=>Math.round(LEN*f));
-let TRACK=store.get('track','gorge');if(TRACK!=='coaster')TRACK='gorge';
-const TRACK_NAME={gorge:'Saffron Gorge',coaster:'Skyline Coaster'};
+const ARCH_S=(RACE?[0.13,0.27,0.41,0.55,0.69,0.83]:[0.27,0.52,0.77]).map(f=>Math.round(LEN*f)),ARCH_R=RACE?60:100;
+if(RACE)for(const a of ARCH_S){const i=Math.round(a/KS);for(const j of [i-1,i,i+1])if(keys[j])keys[j].h=Math.min(keys[j].h,j===i?24:34);}   // the line dips under each arch
+let TRACK=RACE?'race':store.get('track','gorge');if(TRACK!=='coaster'&&TRACK!=='race')TRACK='gorge';
+const TRACK_NAME={gorge:'Saffron Gorge',coaster:'Skyline Coaster',race:'Razorback Canyon'};
 // Skyline Coaster: the current alternates deep valleys and high crests; it dips under the stone arches.
 const KC=230,keysC=[];{const kr=mulberry(7777);let up=false;for(let i=0;i*KC<=LEN+KC*3;i++){if(i<2){keysC.push(46);continue;}up=!up;keysC.push(up?95+kr()*45:12+kr()*10);}
   for(const a of ARCH_S){const i=Math.round(a/KC);for(const j of [i-1,i,i+1])if(keysC[j]!==undefined)keysC[j]=Math.min(keysC[j],j===i?40:60);}}
@@ -171,7 +179,7 @@ vec3 col=mix(vec3(0.64,0.39,0.33),vec3(0.86,0.6,0.45),strata);col=mix(col,vec3(0
 
 /* ================= terrain (procedural detail per pixel) ================= */
 (function(){
-  const ROWSTEP=isTouch?3:2,rows=Math.floor((S-1)/ROWSTEP)+1,cols=isTouch?61:97,EXT=340;
+  const ROWSTEP=isTouch?3:2,rows=Math.floor((S-1)/ROWSTEP)+1,cols=isTouch?61:97,EXT=RACE?300:340;
   const pos=new Float32Array(rows*cols*3),aH=new Float32Array(rows*cols),aAd=new Float32Array(rows*cols);let p=0,q=0;
   for(let r=0;r<rows;r++){const i=Math.min(S-1,r*ROWSTEP),s=i*STEP,fy=C[i].y-FLOOR;
     for(let j=0;j<cols;j++){const t=j/(cols-1)*2-1,d=Math.sign(t)*Math.pow(Math.abs(t),1.35)*EXT,h=relH(s,d);
@@ -244,8 +252,10 @@ diffuseColor.rgb=col;`);};
 const pillars=[];
 (function(){
   const rockMat=rockDetailMat,capMat=swayMat(0x5f8d63,0.02);const v=new THREE.Vector3();
-  for(let s=560;s<LEN-420;s+=rr(240,330)){if(ARCH_S.some(a=>Math.abs(a-s)<40))continue;streamAt(s);const side=rnd()<0.5?-1:1;let d=SD+side*rr(30,52);if(Math.abs(d)>84)d=SD-side*rr(30,52);if(Math.abs(d)>84)continue;
-    const r=rr(5,8),h=rr(60,115);worldAt(s,d,0,v);const gy=groundAt(s,d)-4;
+  const pr=RACE?mulberry(616):rnd,prr=(a,b)=>a+(b-a)*pr();
+  for(let s=RACE?330:560;s<LEN-420;s+=RACE?prr(120,175):rr(240,330)){if(ARCH_S.some(a=>Math.abs(a-s)<40))continue;streamAt(s);const side=pr()<0.5?-1:1;
+    let d=SD+side*(RACE?prr(14,22):rr(30,52));if(Math.abs(d)>WALL_D-8)d=SD-side*(RACE?prr(14,22):rr(30,52));if(Math.abs(d)>WALL_D-8)continue;
+    const r=RACE?prr(4,7):rr(5,8),h=RACE?prr(70,120):rr(60,115);worldAt(s,d,0,v);const gy=groundAt(s,d)-4;
     const m=new THREE.Mesh(new THREE.CylinderGeometry(r*0.75,r*1.15,h,7),rockMat);m.position.set(v.x,gy+h/2,v.z);scene.add(m);
     const c=new THREE.Mesh(new THREE.ConeGeometry(r*0.9,r*1.6,6),capMat);c.position.set(v.x,gy+h+r*0.7,v.z);scene.add(c);
     pillars.push({s,d,x:v.x,z:v.z,r:r*1.05,top:gy+h+r*1.2});}
@@ -363,13 +373,13 @@ vec3 c=mix(vec3(0.5,0.72,0.82),vec3(0.97,0.99,1.0),st);float edge=smoothstep(0.0
 /* ================= stone arches spanning the gorge ================= */
 const arches=[];
 (function(){
-  const archGeo=new THREE.TorusGeometry(100,9,12,64,Math.PI);const vineMat=swayMat(0x4f7d55,0.04);
+  const archGeo=new THREE.TorusGeometry(ARCH_R,9,12,64,Math.PI),AK=ARCH_R/100;const vineMat=swayMat(0x4f7d55,0.04);
   for(const s of ARCH_S){const c=worldAt(s,0,-4,new THREE.Vector3());frame(s);const m=new THREE.Mesh(archGeo,rockDetailMat);m.position.copy(c);m.lookAt(c.clone().add(_t));scene.add(m);
-    arches.push({s,hc:-4});
+    arches.push({s,hc:-4,r:ARCH_R});
     for(let k=0;k<9;k++){const a=Math.PI/2+rr(-0.5,0.5),ht=rr(6,10);const tg=new THREE.ConeGeometry(rr(1.6,2.6),ht,6);tg.translate(0,ht/2,0);const t=new THREE.Mesh(tg,vineMat);
-      t.position.set(Math.cos(a)*108,Math.sin(a)*108,rr(-5,5));t.rotation.z=a-Math.PI/2;m.add(t);}
+      t.position.set(Math.cos(a)*(ARCH_R+8),Math.sin(a)*(ARCH_R+8),rr(-5,5));t.rotation.z=a-Math.PI/2;m.add(t);}
     for(let k=0;k<16;k++){const a=Math.PI/2+rr(-0.75,0.75),len=rr(4,13);const vg=new THREE.ConeGeometry(0.45,len,4);vg.translate(0,-len/2,0);const v=new THREE.Mesh(vg,vineMat);
-      v.position.set(Math.cos(a)*91,Math.sin(a)*91,rr(-6,6));m.add(v);}}
+      v.position.set(Math.cos(a)*(ARCH_R-9),Math.sin(a)*(ARCH_R-9),rr(-6,6));m.add(v);}}
 })();
 
 /* ================= prayer flags strung across the gorge ================= */
@@ -502,6 +512,7 @@ function buildTrack(){
   for(const o of trackObjs){scene.remove(o);if(o.geometry&&o.geometry!==gemGeo&&o.geometry!==ringGeo)o.geometry.dispose();if(o.userData.ownMat)o.material.dispose();}
   trackObjs.length=0;const add=o=>{scene.add(o);trackObjs.push(o);return o;};
   const tr=mulberry(TRACK==='coaster'?4242:1313),r2=(a,b)=>a+(b-a)*tr();
+  if(RACE){buildGates(add);gems=[];rings=[];gemMesh=add(new THREE.InstancedMesh(gemGeo,gemMat,1));gemMesh.count=0;return;}
   const sp=[];for(let s=0;s<=LEN;s+=10)sp.push(streamPoint(s,new THREE.Vector3()));
   const tube=add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(sp),Math.floor(LEN/5),TRACK==='coaster'?2.6:2.1,10,false),streamMat));tube.frustumCulled=false;
   if(TRACK==='coaster'){
@@ -526,6 +537,31 @@ function buildTrack(){
   rings=[];const ringS=[];
   if(TRACK==='coaster'){for(let i=2;i*KC<LEN-300;i++)ringS.push(i*KC);}else{for(let x=430;x<LEN-300;x+=r2(380,470))ringS.push(x);}
   for(const rs of ringS){if(pillars.some(p=>Math.abs(p.s-rs)<22))continue;const r={s:rs,pos:new THREE.Vector3(),mesh:makeRingMesh(),got:false};trackObjs.push(r.mesh);setRing(r,rs);rings.push(r);}
+}
+/* race gates: fly through each one; a missed gate adds 3 seconds */
+const GATE_R=RACE?8.5:0,GATE_PEN=3;let gates=[];
+const gateGeo=new THREE.TorusGeometry(8.5,0.55,8,36),gatePostGeo=new THREE.CylinderGeometry(0.35,0.35,1,6);
+function buildGates(add){
+  gates=[];const gr=mulberry(909);
+  for(let s=260;s<LEN-260;s+=150+gr()*55){
+    let gs=s;if(pillars.some(p=>Math.abs(p.s-gs)<28))gs+=36;if(pillars.some(p=>Math.abs(p.s-gs)<28))continue;
+    streamAt(gs);let d=SD,h=SH;h=Math.max(h,relH(gs,d)+GATE_R+2);
+    const arch=arches.find(a=>Math.abs(a.s-gs)<14);if(arch)h=Math.min(h,a_inner(arch,d)-GATE_R-3);
+    const pos=worldAt(gs,d,h,new THREE.Vector3());frame(gs);
+    const m=add(new THREE.Mesh(gateGeo,new THREE.MeshLambertMaterial({color:0xeafcff,emissive:0x2a7f94,flatShading:true})));m.userData.ownMat=true;
+    m.position.copy(pos);m.lookAt(pos.clone().add(_t));m.frustumCulled=true;
+    const post=add(new THREE.Mesh(gatePostGeo,m.material));const gy=groundAt(gs,d);post.scale.y=Math.max(0.1,pos.y-GATE_R-gy);post.position.set(pos.x,gy+post.scale.y/2,pos.z);
+    gates.push({s:gs,d,pos,mesh:m,post,state:0});}
+}
+function a_inner(a,d){return Math.sqrt(Math.max(0,(a.r-9)*(a.r-9)-d*d))+a.hc;}
+function resetGates(){for(const g of gates){g.state=0;paintGate(g);}G.gi=0;if(gates[0])paintGate(gates[0],true);}
+function paintGate(g,next){const c=g.state===1?0x9be08a:g.state===2?0xff6a5a:next?0xffd25e:0xeafcff,e=g.state===1?0x2d6a22:g.state===2?0x7a1c12:next?0x9a6a10:0x2a7f94;
+  g.mesh.material.color.set(c);g.mesh.material.emissive.set(e);g.mesh.scale.setScalar(next?1.06:1);}
+function checkGates(){
+  while(G.gi<gates.length&&G.s>=gates[G.gi].s){const g=gates[G.gi];
+    if(g.pos.distanceTo(G.pos)<GATE_R+0.6){g.state=1;G.boost=Math.min(1,G.boost+0.12);tone(880,0.12,'sine',0.06);setTimeout(()=>tone(1320,0.15,'sine',0.05),70);buzz(10);}
+    else{g.state=2;G.pen+=GATE_PEN;toast('Missed gate +'+GATE_PEN+' s','bad');tone(150,0.3,'square',0.05);buzz(60);}
+    paintGate(g);G.gi++;if(gates[G.gi])paintGate(gates[G.gi],true);}
 }
 buildTrack();
 const FINISH_S=LEN-170;
@@ -803,7 +839,7 @@ function update(dt){
   const inp=readInput(dt);G.armL+=(inp.L-G.armL)*Math.min(1,dt*10);G.armR+=(inp.R-G.armR)*Math.min(1,dt*10);
   let pitchIn=(inp.L+inp.R)/2;if(settings.invert)pitchIn=-pitchIn;const turnIn=(inp.L-inp.R)/2;G.pitchIn=pitchIn;G.turnIn=turnIn;
   // where is the current?
-  streamPoint(G.s,_sp);const streamD=SD,streamOff=_sp.distanceTo(G.pos);G.inStream=streamOff<(TRACK==='coaster'?7.5:5.5);
+  streamPoint(G.s,_sp);const streamD=SD,streamOff=_sp.distanceTo(G.pos);G.inStream=!RACE&&streamOff<(TRACK==='coaster'?7.5:5.5);
   const fy=floorY(G.s),hRel=G.pos.y-fy;frame(G.s);
   let tgt=pitchIn*0.78-0.1;
   if(G.speed<34)tgt-=(34-G.speed)*0.025;
@@ -837,11 +873,12 @@ function update(dt){
   for(const p of pillars){if(Math.abs(p.s-G.s)>25)continue;const dx=G.pos.x-p.x,dz=G.pos.z-p.z,rr2=(p.r+1)*(p.r+1);
     if(dx*dx+dz*dz<rr2&&G.pos.y<p.top){if(isTut||G.invuln>0){const l=Math.sqrt(dx*dx+dz*dz)||1;G.pos.x=p.x+dx/l*(p.r+1.2);G.pos.z=p.z+dz/l*(p.r+1.2);if(isTut)softBump();}else{crash();return;}}}
   for(const a of arches){if(Math.abs(a.s-G.s)>9.5)continue;const ah=G.pos.y-(floorY(a.s)+a.hc),dist=Math.hypot(G.d,ah);
-    if(Math.abs(dist-100)<10.5){if(isTut||G.invuln>0){G.pos.y+=dist<100?-1.5:1.5;if(isTut)softBump();}else{crash();return;}}}
+    if(Math.abs(dist-a.r)<10.5){if(isTut||G.invuln>0){G.pos.y+=dist<a.r?-1.5:1.5;if(isTut)softBump();}else{crash();return;}}}
   {if(G.s>G.progS+35){G.progS=G.s;G.progT=0;}else G.progT+=dt;const hd=Math.abs(angDiff(G.yaw,tyaw));const oob=streamOff>42||hRel>175||hd>1.4||G.progT>4;G.oobT=oob?G.oobT+dt:Math.max(0,G.oobT-dt*0.5);if(G.oobT>=12){G.oobT=0;startRescue();return;}}
   collectGems(isTut?tutGems:gems,dt);collectRings(isTut?tutRings:rings);
   if(G.comboT>0){G.comboT-=dt;if(G.comboT<=0)G.combo=0;}
-  if(isTut)tutUpdate(dt);else if(G.s>=FINISH_S)finish();
+  if(RACE)checkGates();
+  if(isTut)tutUpdate(dt);else if(G.s>=FINISH_S)(RACE?raceFinish():finish());
 }
 
 /* ================= navigator ================= */
@@ -849,7 +886,7 @@ let arrowOp=0;const _at=new THREE.Vector3(),_ad=new THREE.Vector3();
 function updateNavigator(dt,now){
   let want=0;const playing=G.state==='play'&&G.crashT<=0;
   if(playing){const list=G.mode==='tut'?tutRings:rings;let ring=null;
-    for(const r of list){if(r.got||!r.mesh.visible)continue;if(r.s>G.s+3&&r.s<G.s+170){if(!ring||r.s<ring.s)ring=r;}}
+    if(RACE){const g=gates[G.gi];if(g&&g.s<G.s+170)ring=g;}else for(const r of list){if(r.got||!r.mesh.visible)continue;if(r.s>G.s+3&&r.s<G.s+170){if(!ring||r.s<ring.s)ring=r;}}
     if(ring){_at.copy(ring.pos);_ad.subVectors(_at,G.pos).normalize();const ang=Math.acos(clamp(_ad.dot(dir),-1,1));want=ang>0.1?0.85:0.35;}
     else{streamPoint(G.s,_sp);const off=_sp.distanceTo(G.pos);if(off>14){streamPoint(G.s+60,_at);want=clamp((off-14)/20,0.3,0.85);}}}
   arrowOp+=(want-arrowOp)*Math.min(1,dt*6);
@@ -993,7 +1030,20 @@ function updateVisuals(dt,now){
 
 /* ================= HUD ================= */
 const fmtTime=t=>Math.floor(t/60)+':'+String(Math.floor(t%60)).padStart(2,'0');
+const fmtRace=t=>Math.floor(t/60)+':'+(t%60).toFixed(1).padStart(4,'0');
+function raceTime(){return G.raceT0?(performance.now()-G.raceT0)/1000:0;}
+function myPlace(){if(G.solo||room.status!=='in')return null;let n=1,total=1;const mine=G.state==='end'?G.final:null;
+  for(const p of room.players.values()){if(p.id===room.me.id)continue;if(!p.st&&!p.fin)continue;total++;
+    if(p.fin){if(mine==null||p.fin.time<mine)n++;}else if(mine==null&&p.st&&p.st.s>G.s)n++;}
+  return total>1?{n,total}:null;}
+const ord=n=>n+(n%100>=11&&n%100<=13?'th':['th','st','nd','rd'][n%10]||'th');
 function updateHUD(){
+  if(RACE){$('score').textContent=fmtRace(raceTime()+G.pen);const pl=myPlace();$('mult').hidden=!pl;if(pl)$('mult').textContent=ord(pl.n)+' / '+pl.total;
+    $('gemcount').textContent='Gate '+Math.min(G.gi+1,gates.length)+' / '+gates.length+(G.pen?' · +'+G.pen+' s':'');$('skim').hidden=!G.skim;$('curChip').hidden=true;$('thermChip').hidden=!G.inThermal;
+    {const ob=$('oob');if(G.oobT>3){ob.hidden=false;ob.innerHTML='Off course · back on course in <b>'+Math.ceil(12-G.oobT)+'s</b> · follow the arrow';}else ob.hidden=true;}
+    $('prog').style.width=(G.s/FINISH_S*100).toFixed(1)+'%';$('dist').textContent=Math.max(0,Math.round(FINISH_S-G.s))+' m to finish';
+    $('speed').textContent=Math.round(G.speed*1.5);$('boostFill').style.width=(G.boost*100)+'%';const ready=G.boost>=0.33,bl=$('boostLbl');bl.classList.toggle('ready',ready);
+    bl.textContent=G.boostT>0?'Boosting':ready?(isTouch?'Boost ready · double-tap':'Boost ready · Space'):'Boost';return;}
   $('score').textContent=Math.floor(G.score).toLocaleString();const m=multiplier();$('mult').textContent='x'+(m%1?m.toFixed(1):m);
   $('gemcount').textContent=G.gems+' / '+gems.length+' gems';$('skim').hidden=!G.skim;$('curChip').hidden=!G.inStream;$('thermChip').hidden=!G.inThermal;
   {const ob=$('oob');if(G.oobT>3){ob.hidden=false;ob.innerHTML='Off course · back on the current in <b>'+Math.ceil(12-G.oobT)+'s</b> · follow the arrow';}else ob.hidden=true;}
@@ -1007,7 +1057,7 @@ document.documentElement.classList.toggle('touch',isTouch);
 const remote={active:false,L:0,R:0,tl:false,tr:false,mode:'two'};
 
 /* ================= flow ================= */
-function showOnly(id){for(const o of ['startScreen','pauseScreen','endScreen','tutDone'])$(o).hidden=o!==id;}
+function showOnly(id){for(const o of ['startScreen','pauseScreen','endScreen','tutDone','raceLobby','raceEnd'])$(o).hidden=o!==id;}
 function syncSettingsUI(){$('fppBox').checked=settings.view==='fp';$('viewBtn').textContent=settings.view==='fp'?'3RD':'FPP';$('viewBtn').setAttribute('aria-label',settings.view==='fp'?'Switch to third-person view':'Switch to first-person view');
   for(const b of document.querySelectorAll('.trackcard'))b.setAttribute('aria-pressed',String(b.dataset.track===TRACK));$('trackEyebrow').textContent=TRACK_NAME[TRACK];$('trackName').textContent=TRACK_NAME[TRACK];$('curChip').textContent=TRACK==='coaster'?'ON THE RAIL':'IN THE CURRENT';$('invertPitch').checked=$('invertPitch2').checked=settings.invert;$('sens').value=$('sens2').value=settings.sens;
   for(const b of $('modeSeg').querySelectorAll('button'))b.setAttribute('aria-pressed',String(b.dataset.mode===settings.mode));
@@ -1020,20 +1070,22 @@ function updateTutBadge(){const done=store.get('tutDone',false);$('tutBadge').hi
 function setView(v){settings.view=v;store.set('view',v);syncSettingsUI();toast(v==='fp'?'First-person view':'Third-person view','good');}
 $('viewBtn').onclick=()=>setView(settings.view==='fp'?'3p':'fp');
 $('fppBox').addEventListener('change',e=>{settings.view=e.target.checked?'fp':'3p';store.set('view',settings.view);syncSettingsUI();});
-for(const b of document.querySelectorAll('.trackcard'))b.onclick=()=>{if(G.state!=='menu'||TRACK===b.dataset.track)return;TRACK=b.dataset.track;store.set('track',TRACK);buildTrack();best=store.get(bestKey(),0);syncSettingsUI();};
+for(const b of document.querySelectorAll('.trackcard'))b.onclick=()=>{if(G.state!=='menu'||TRACK===b.dataset.track)return;
+  if(b.dataset.track==='race'||RACE){store.set('track',b.dataset.track);location.href=location.pathname;return;}   // the race canyon is a different world: reload into it
+  TRACK=b.dataset.track;store.set('track',TRACK);buildTrack();best=store.get(bestKey(),0);syncSettingsUI();};
 window.addEventListener('keydown',e=>{if(e.repeat)return;if(e.key==='v'||e.key==='V'){setView(settings.view==='fp'?'3p':'fp');}});
 syncSettingsUI();updateTutBadge();
 
 function resetRun(){Object.assign(G,{state:'play',score:0,combo:0,comboT:0,gems:0,rings:0,crashes:0,boost:0.34,boostT:0,crashT:0,invuln:1,time:0,speed:72,bumpT:0,armL:0,armR:0,yawRate:0,pitchRate:0,gust:0,oobT:0,rescueT:0,inThermal:false,progS:30,progT:0});thermals.forEach(t=>t.hit=false);$('fadeB').classList.remove('on');
   placeAt(30,48);updateCamera(0,true);}
 function goFull(){if(!isTouch)return;try{const el=document.documentElement;if(el.requestFullscreen&&!document.fullscreenElement)el.requestFullscreen().then(()=>{try{screen.orientation.lock('landscape').catch(()=>{});}catch(e){}}).catch(()=>{});}catch(e){}}
-function start(){if(needCam())return;initAudio();if(actx&&actx.state==='suspended')actx.resume().catch(()=>{});G.mode='main';resetRun();
+function start(){if(RACE){openLobby();return;}if(needCam())return;initAudio();if(actx&&actx.state==='suspended')actx.resume().catch(()=>{});G.mode='main';resetRun();
   for(const g of gems){g.got=false;g.pull=0;}for(const r of rings)setRing(r,r.s);
   showOnly(null);$('coach').hidden=true;$('hud').hidden=false;$('hud').classList.remove('tut');canvas.focus();goFull();}
 function startTutorial(){if(needCam())return;initAudio();if(actx&&actx.state==='suspended')actx.resume().catch(()=>{});G.mode='tut';resetRun();
   tutGems.forEach(g=>{g.got=true;g.s=-999;});tutRings.forEach(r=>{r.got=true;r.s=-999;});
   showOnly(null);$('hud').hidden=false;$('hud').classList.add('tut');$('coach').hidden=false;tutEnter(0);canvas.focus();goFull();}
-function toMenu(){G.state='menu';G.mode='main';$('hud').hidden=true;$('coach').hidden=true;showOnly('startScreen');updateTutBadge();}
+function toMenu(){G.state='menu';G.mode='main';$('count').hidden=true;$('hud').hidden=true;$('coach').hidden=true;showOnly('startScreen');updateTutBadge();}
 function pause(){if(G.state!=='play')return;G.state='paused';showOnly('pauseScreen');}
 function resume(){if(G.state!=='paused')return;$('pauseNote').textContent='';lostSince=0;padLostSince=0;G.state='play';showOnly(null);canvas.focus();}
 function finish(){G.state='end';G.score=Math.floor(G.score);best=store.get(bestKey(),0);const isBest=G.score>best;if(isBest){best=G.score;store.set(bestKey(),best);}
@@ -1042,10 +1094,92 @@ function finish(){G.state='end';G.score=Math.floor(G.score);best=store.get(bestK
   const ratio=G.gems/gems.length;$('endTitle').textContent=G.crashes===0&&ratio>0.7?'Flawless glide':ratio>0.5?'Smooth flying':'You made it down';
   $('hud').hidden=true;showOnly('endScreen');tone(392,0.3,'triangle',0.08);setTimeout(()=>tone(523,0.3,'triangle',0.08),120);setTimeout(()=>tone(784,0.5,'triangle',0.08),240);}
 $('startBtn').onclick=start;$('tutBtn').onclick=startTutorial;$('againBtn').onclick=start;$('endMenuBtn').onclick=toMenu;
-$('pauseBtn').onclick=pause;$('resumeBtn').onclick=resume;$('restartBtn').onclick=()=>{G.mode==='tut'?startTutorial():start();};$('menuBtn').onclick=toMenu;
+$('pauseBtn').onclick=pause;$('resumeBtn').onclick=resume;$('restartBtn').onclick=()=>{if(G.mode==='race'){G.solo?beginRace(true):openLobby();return;}G.mode==='tut'?startTutorial():start();};$('menuBtn').onclick=toMenu;
 $('tdGo').onclick=start;$('tdAgain').onclick=startTutorial;
 window.addEventListener('keydown',e=>{if(e.key==='Enter'){if(!$('camSetup').hidden||!$('phoneSetup').hidden)return;if(G.state==='menu'||G.state==='end'||G.state==='tutdone')start();}});
 try{hot&&hot.snapshot&&hot.snapshot(()=>({best}));}catch(e){}
+
+/* ================= race ================= */
+G.pen=0;G.gi=0;G.raceT0=0;G.solo=true;G.final=0;
+const myName=()=>{let n=store.get('name','');if(!n){n='Flyer '+(10+Math.floor(Math.random()*89));store.set('name',n);}return n;};
+function openLobby(){if(needCam())return;G.state='menu';$('hud').hidden=true;$('count').hidden=true;$('rName').value=myName();showOnly('raceLobby');syncLobby();}
+let qrRoom='';
+function roomLink(){const u=new URL(location.href);u.search='';u.hash='';u.searchParams.set('room',room.code);return u.toString();}
+function syncLobby(){
+  const inRoom=room.status==='in';$('rOut').hidden=inRoom||room.status==='joining';$('rIn').hidden=!inRoom;
+  $('rMsg').textContent=room.status==='joining'?'Joining room…':room.status==='error'?room.error:'';
+  if(inRoom){$('rRoom').textContent=room.code;const link=roomLink();$('rLink').textContent=link;
+    if(qrRoom!==link){qrRoom=link;QRCode.toCanvas($('rQR'),link,{width:300,margin:1,color:{dark:'#191d2e',light:'#fff6ea'}},err=>{if(err)logIssue('Race','Could not draw the room QR code: '+err.message);});}
+    const ul=$('rPlayers');ul.innerHTML='';const list=[...room.players.values()].sort((a,b)=>a.t-b.t);
+    for(const p of list){const li=document.createElement('li');const l=document.createElement('b');const dot=document.createElement('i');dot.style.background=p.color;l.append(dot,p.name+(p.id===room.me.id?' (you)':''));
+      const r=document.createElement('span');r.textContent=p.host?'host':'';li.append(l,r);ul.append(li);}
+    $('rStart').hidden=!room.isHost;$('rStart').textContent=list.length>1?'Start race for everyone':'Start race';
+    if(!room.isHost)$('rMsg').textContent='Waiting for the host to start the race.';}
+}
+function syncRaceEnd(){
+  if($('raceEnd').hidden)return;const multi=!G.solo&&room.status==='in';const ol=$('reList');ol.innerHTML='';
+  const rows=multi?room.results:[{id:'me',name:myName(),time:G.final,pen:G.pen}];
+  rows.forEach((r,i)=>{const li=document.createElement('li');if(r.id===room.me.id||r.id==='me')li.className='me';const p=room.players.get(r.id);
+    const l=document.createElement('b');const dot=document.createElement('i');dot.style.background=p?p.color:'#ffd25e';l.append(dot,(multi?ord(i+1)+'  ':'')+r.name);
+    const t=document.createElement('span');t.textContent=fmtRace(r.time)+(r.pen?' (incl. +'+r.pen+' s)':'');li.append(l,t);ol.append(li);});
+  if(multi){const still=[...room.players.values()].filter(p=>!p.fin&&p.st&&!p.st.done).length;$('reNote').textContent=still?still+(still>1?' racers are':' racer is')+' still flying…':'';
+    $('reAgain').hidden=!room.isHost;$('reAgain').textContent='Race again';if(!room.isHost&&!still)$('reNote').textContent='Waiting for the host to start the next race.';}
+  else{$('reAgain').hidden=false;$('reAgain').textContent='Try again';$('reNote').textContent='';}
+  $('reLobby').hidden=!multi;
+}
+onRoomChange(()=>{if(!$('raceLobby').hidden)syncLobby();syncRaceEnd();});
+onRaceStart(()=>{if(RACE)beginRace(false);});
+function beginRace(solo){
+  initAudio();if(actx&&actx.state==='suspended')actx.resume().catch(()=>{});
+  $('camSetup').hidden=true;$('phoneSetup').hidden=true;
+  G.mode='race';G.solo=solo;resetRun();resetGates();G.pen=0;G.raceT0=0;G.final=0;G.state='count';G.countEnd=performance.now()+3000;G._cdN=0;
+  showOnly(null);$('coach').hidden=true;$('hud').hidden=false;$('hud').classList.remove('tut');$('count').hidden=false;canvas.focus();goFull();}
+function countdown(now){const left=(G.countEnd-now)/1000,n=Math.ceil(left);const el=$('count');   // real clock, so every racer's GO lines up
+  if(left<=0){G.state='play';G.raceT0=performance.now();el.textContent='GO';el.classList.add('go');tone(988,0.4,'triangle',0.09);buzz(30);setTimeout(()=>{el.hidden=true;el.classList.remove('go');},700);return;}
+  el.textContent=n;el.classList.remove('go');if(n!==G._cdN){G._cdN=n;tone(523,0.18,'triangle',0.08);}}
+function raceFinish(){G.state='end';G.final=raceTime()+G.pen;$('hud').hidden=true;
+  const key='best.race',prev=store.get(key,0),isBest=!prev||G.final<prev;if(isBest)store.set(key,G.final);
+  if(!G.solo&&room.status==='in')sendFinish(G.final,G.pen);
+  const missed=gates.filter(g=>g.state===2).length;
+  $('reTitle').textContent=missed===0?'Clean run':missed<=2?'Nice racing':'Finished';
+  $('reMine').textContent='Your time '+fmtRace(G.final)+(missed?' · '+missed+' gate'+(missed>1?'s':'')+' missed (+'+G.pen+' s)':' · every gate')+(isBest?' · your best on this device':' · best '+fmtRace(prev));
+  showOnly('raceEnd');syncRaceEnd();tone(392,0.3,'triangle',0.08);setTimeout(()=>tone(523,0.3,'triangle',0.08),120);setTimeout(()=>tone(784,0.5,'triangle',0.08),240);}
+$('rName').addEventListener('change',e=>{const n=e.target.value.trim().slice(0,16)||myName();store.set('name',n);setMyName(n);});
+$('rCreate').onclick=()=>{store.set('name',$('rName').value.trim()||myName());joinRoom(newRoomCode(),myName());};
+$('rJoin').onclick=()=>{const c=cleanCode($('rCode').value);if(c.length<3){$('rMsg').textContent='Type the room code your friend sees on their screen.';return;}store.set('name',$('rName').value.trim()||myName());joinRoom(c,myName());};
+$('rCode').addEventListener('keydown',e=>{if(e.key==='Enter'){e.stopPropagation();$('rJoin').click();}});
+$('rSolo').onclick=$('rSolo2').onclick=()=>beginRace(true);
+$('rStart').onclick=()=>{if(!room.isHost)return;startRace();beginRace(false);};
+$('rLeave').onclick=()=>{leaveRoom();syncLobby();};
+$('rCopy').onclick=()=>{try{navigator.clipboard.writeText(roomLink()).then(()=>toast('Link copied','good'));}catch(e){}};
+$('rBack').onclick=()=>toMenu();
+$('reAgain').onclick=()=>{if(G.solo||room.status!=='in'){beginRace(true);return;}if(room.isHost){startRace();beginRace(false);}};
+$('reLobby').onclick=()=>openLobby();$('reMenu').onclick=()=>toMenu();
+// ghosts: the other racers, see-through, with name tags
+const ghosts=new Map();
+function makeGhost(p){const grp=new THREE.Group();const mat=new THREE.MeshBasicMaterial({color:p.color,transparent:true,opacity:0.55,side:THREE.DoubleSide,depthWrite:false});
+  const wing=new THREE.Shape();wing.moveTo(0,-1.1);wing.lineTo(1.35,0.55);wing.lineTo(0.3,0.9);wing.lineTo(0,1.6);wing.lineTo(-0.3,0.9);wing.lineTo(-1.35,0.55);wing.closePath();
+  const wg=new THREE.ShapeGeometry(wing);wg.rotateX(-Math.PI/2);const w=new THREE.Mesh(wg,mat);grp.add(w);
+  const body=new THREE.Mesh(new THREE.SphereGeometry(0.25,8,6),mat);body.position.set(0,0.12,-0.85);grp.add(body);
+  const c=document.createElement('canvas');c.width=256;c.height=64;const g=c.getContext('2d');g.font='700 34px "Bricolage Grotesque",system-ui,sans-serif';g.textAlign='center';g.textBaseline='middle';
+  g.fillStyle='rgba(13,16,32,.55)';const tw=Math.min(250,g.measureText(p.name).width+28);g.fillRect(128-tw/2,8,tw,48);g.fillStyle=p.color;g.fillText(p.name,128,33);
+  const tag=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(c),transparent:true,depthWrite:false,depthTest:false}));tag.scale.set(4.4,1.1,1);tag.position.y=2.3;grp.add(tag);
+  grp.scale.setScalar(1.485);scene.add(grp);return {grp,name:p.name};}
+function updateRaceNet(now){
+  if(!RACE)return;
+  if(G.state==='count'){countdown(now);updateHUD();}
+  const racing=G.mode==='race'&&!G.solo&&room.status==='in';
+  if(racing&&(G.state==='play'||G.state==='count'||G.state==='end'||G.state==='paused'))sendState(now,{p:[G.pos.x,G.pos.y,G.pos.z],a:[G.pitch,G.yaw,G.roll],s:G.s,done:G.state==='end'});
+  const seen=new Set();
+  if(racing&&G.state!=='menu')for(const p of room.players.values()){if(p.id===room.me.id)continue;const pose=ghostPose(p,now);if(!pose||pose.done)continue;seen.add(p.id);
+    let gh=ghosts.get(p.id);if(gh&&gh.name!==p.name){scene.remove(gh.grp);gh=null;}if(!gh){gh=makeGhost(p);ghosts.set(p.id,gh);}
+    gh.grp.visible=true;gh.grp.position.set(pose.p[0],pose.p[1],pose.p[2]);eul.set(pose.a[0],pose.a[1],pose.a[2],'YXZ');gh.grp.setRotationFromEuler(eul);}
+  for(const [id,gh] of ghosts)if(!seen.has(id)){gh.grp.visible=false;if(!room.players.has(id)){scene.remove(gh.grp);ghosts.delete(id);}}
+}
+if(RACE){$('tutBtn').hidden=true;$('startBtn').querySelector('strong').textContent='Race Razorback Canyon';
+  $('startBtn').querySelector('span').textContent='Make a room and send friends the link, or practise alone. Fly through every gate: each one missed costs 3 seconds.';
+  document.querySelector('#startScreen .lede').textContent='A tight, twisting canyon of stone pillars and low arches. No gems, no current: just the fastest line through the gates to the finish.';}
+if(ROOM_PARAM){joinRoom(ROOM_PARAM,myName());openLobby();}   // join straight away, even if the controls need setting up first
 
 /* ================= control picker & camera control ================= */
 attachCanvas($('camSetupView'));attachCanvas($('camHudView'));
@@ -1140,7 +1274,7 @@ syncControlUI();
 let last=performance.now(),fpsF=0,fpsT=0,lowCount=0,lowered=false;
 function loop(now){requestAnimationFrame(loop);let dt=(now-last)/1000;last=now;if(dt>0.05)dt=0.05;if(dt<=0)dt=0.016;timeU.value=now/1000;
   try{if(G.state==='play'){update(dt);updateHUD();if(G.mode==='tut')tutPads();}else $('oob').hidden=true;
-    updateCamera(dt,false);updateVisuals(dt,now/1000);drawThumbs();updateHand(now);handHud(now);updatePhone(now);phoneHud(now);post.render(now/1000,G.state==='play'?clamp((G.speed-70)/100,0,1):0);}
+    updateCamera(dt,false);updateVisuals(dt,now/1000);drawThumbs();updateHand(now);handHud(now);updatePhone(now);phoneHud(now);updateRaceNet(now);post.render(now/1000,G.state==='play'?clamp((G.speed-70)/100,0,1):0);}
   catch(e){logIssue('Frame',e.message+(e.stack?' | '+String(e.stack).split('\n')[1]:''));}
   fpsF++;fpsT+=dt;if(fpsT>=2){const fps=fpsF/fpsT;fpsF=0;fpsT=0;
     if(G.state==='play'&&fps<26){lowCount++;if(lowCount>=2&&post.level>1){post.setLevel(1);lowCount=0;logIssue('Performance','Low frame rate ('+Math.round(fps)+' fps). Switched off the brushwork filter to keep play smooth.');}else if(lowCount>=2&&!lowered){lowered=true;pixelRatio=1;renderer.setPixelRatio(1);resize();logIssue('Performance','Low frame rate ('+Math.round(fps)+' fps). Lowered render resolution to keep play smooth.');}}else lowCount=0;}}

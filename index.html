@@ -59,6 +59,7 @@
 </div>
 
 <div class="toast" id="toast"></div>
+<div class="countdown" id="count" hidden></div>
 <div class="thumb" id="thumbL"><span class="tag">LEFT ARM</span><div class="knob"></div></div>
 <div class="thumb" id="thumbR"><span class="tag">RIGHT ARM</span><div class="knob"></div></div>
 
@@ -70,6 +71,7 @@
     <div class="tracks" role="group" aria-label="Choose a track">
       <button class="trackcard" data-track="gorge" aria-pressed="true"><span class="tn">Saffron Gorge</span><span class="td">The classic glide down the canyon, gathering gems along the current.</span></button>
       <button class="trackcard" data-track="coaster" aria-pressed="false"><span class="tn">Skyline Coaster</span><span class="td">Ride a rail of wind through big drops and soaring climbs.</span></button>
+      <button class="trackcard" data-track="race" aria-pressed="false"><span class="tn">Razorback Canyon <span class="badge new">Race</span></span><span class="td">Race friends through a tight canyon: gates, pillars, low arches.</span></button>
     </div>
     <div class="ctlpick" role="group" aria-label="Choose your controls">
       <button class="ctlcard" data-ctl="simple"><span class="tn">Arrow keys</span><span class="td">↑ climb, ↓ dive, ← → turn. The easiest start.</span></button>
@@ -141,6 +143,55 @@
     <div class="actions">
       <button class="primary-btn" id="againBtn">Fly again</button>
       <button class="secondary" id="endMenuBtn">Main menu</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="raceLobby" hidden>
+  <div class="card">
+    <div class="eyebrow">Razorback Canyon · Race</div>
+    <h2>Race your friends</h2>
+    <label class="rname">Your name <input id="rName" maxlength="16" autocomplete="off" spellcheck="false"></label>
+    <div id="rOut">
+      <div class="actions">
+        <button class="primary-btn" id="rCreate">Make a room</button>
+        <span class="rjoin"><input id="rCode" placeholder="room code" maxlength="8" autocomplete="off" spellcheck="false"><button class="secondary" id="rJoin">Join</button></span>
+      </div>
+      <button class="secondary" id="rSolo">Practise alone</button>
+    </div>
+    <div id="rIn" hidden>
+      <div class="rroom">
+        <canvas id="rQR" aria-label="QR code for the room link"></canvas>
+        <div>
+          <div class="small">Room code</div><div class="rcode" id="rRoom"></div>
+          <p class="small">Friends scan the code, or open this link, or type the code on the race screen:</p>
+          <p class="small rlink" id="rLink"></p>
+          <button class="secondary" id="rCopy">Copy link</button>
+        </div>
+      </div>
+      <ul class="rplayers" id="rPlayers"></ul>
+      <div class="actions">
+        <button class="primary-btn" id="rStart">Start race</button>
+        <button class="secondary" id="rSolo2">Practise alone</button>
+        <button class="secondary" id="rLeave">Leave room</button>
+      </div>
+    </div>
+    <p class="small" id="rMsg"></p>
+    <div class="actions"><button class="secondary" id="rBack">Back to menu</button></div>
+  </div>
+</div>
+
+<div class="overlay" id="raceEnd" hidden>
+  <div class="card">
+    <div class="eyebrow">Finish</div>
+    <h2 id="reTitle">Finished</h2>
+    <p class="lede" id="reMine"></p>
+    <ol class="rresults" id="reList"></ol>
+    <p class="small" id="reNote"></p>
+    <div class="actions">
+      <button class="primary-btn" id="reAgain">Race again</button>
+      <button class="secondary" id="reLobby">Room</button>
+      <button class="secondary" id="reMenu">Main menu</button>
     </div>
   </div>
 </div>
