@@ -19,7 +19,7 @@ export function startPad(code) {
   </main>`;
   const $ = id => document.getElementById(id);
   let peer = null, conn = null, b0 = null, g0 = null, beta = 0, gamma = 0, curP = 0, curR = 0, started = false, wake = null, gotSensor = false;
-  let relay = null, relayUp = false, beat = 0;
+  let relay = null, relayUp = false;
   const up = () => (conn && conn.open) || relayUp;
   const send = d => { if (conn && conn.open) { try { conn.send(d); } catch (_) {} } else if (relayUp) relay.send(d); };
   function linked(kind) { stat(kind === 'relay' ? 'Connected (relay)' : 'Connected', true); $('padGo').hidden = true; $('padBoost').hidden = false; $('padLevel').disabled = false;
@@ -34,11 +34,19 @@ export function startPad(code) {
     const p = Math.max(-80, Math.min(80, beta - b0)), r = Math.max(-80, Math.min(80, gamma - g0));
     $('padWing').style.transform = `translateY(${(-p * 1.6).toFixed(1)}px) rotate(${r.toFixed(1)}deg)`;
     curP = p; curR = r;
+    sendTilt(false);   // send the moment the sensor reports, rather than waiting for the next beat
   }
-  // send the latest tilt on a steady beat, so the big screen always knows the phone is there even when it is held still
-  // the direct link gets every beat (60 a second); the relay gets every other one
-  setInterval(() => { beat++; if (!gotSensor) return; const m = [+curP.toFixed(2), +curR.toFixed(2)];
-    if (conn && conn.open) { try { conn.send(m); } catch (_) {} } else if (relayUp && beat % 2 === 0) relay.send(m); }, 16);
+  // the direct link gets every sensor reading (up to ~100 a second); the relay, which is slower, at most 30 a second
+  let lastSent = 0;
+  function sendTilt(beatTick) {
+    if (!gotSensor) return; const t = performance.now(), direct = conn && conn.open;
+    if (t - lastSent < (direct ? 8 : 33) || (beatTick && t - lastSent < 40)) return;
+    const m = [+curP.toFixed(2), +curR.toFixed(2)]; lastSent = t;
+    if (direct) { try { conn.send(m); } catch (_) {} } else if (relayUp) relay.send(m);
+  }
+  // and a steady beat, so the big screen knows the phone is there even when it is held perfectly still
+  setInterval(() => sendTilt(true), 50);
+  const echo = d => { if (d && d.p) send({ q: d.p }); };
   function connect() {
     stat('Connecting…');
     try { if (peer) peer.destroy(); } catch (_) {}
@@ -46,13 +54,13 @@ export function startPad(code) {
     peer.on('open', () => {
       conn = peer.connect(padId(code), { reliable: false, serialization: 'json' });
       conn.on('open', () => { linked('direct'); b0 = null; });
-      conn.on('data', d => { if (d && d.v && navigator.vibrate) try { navigator.vibrate(d.v); } catch (_) {} });
+      conn.on('data', d => { echo(d); if (d && d.v && navigator.vibrate) try { navigator.vibrate(d.v); } catch (_) {} });
       conn.on('close', lost);
     });
     peer.on('error', e => { if (up()) return; stat(e && e.type === 'peer-unavailable' ? 'Code not found. Open the phone glider screen on the big screen and scan again.' : 'Connection problem. Tap to retry.'); retry(); });
     setTimeout(() => { if (!up()) { stat('Could not reach the big screen. Put the phone on the same Wi‑Fi as it, then tap to retry.'); retry(); } }, 14000);
     // in parallel, the relay: works even when the two devices cannot see each other directly
-    if (!relay) joinRelay(code, d => { if (!d) return; if (d.k && !relayUp) { relayUp = true; if (!(conn && conn.open)) linked('relay'); } else if (d.v && navigator.vibrate) try { navigator.vibrate(d.v); } catch (_) {} })
+    if (!relay) joinRelay(code, d => { if (!d) return; if (d.p) { if (!(conn && conn.open)) echo(d); } else if (d.k && !relayUp) { relayUp = true; if (!(conn && conn.open)) linked('relay'); } else if (d.v && navigator.vibrate) try { navigator.vibrate(d.v); } catch (_) {} })
       .then(r => { relay = r; if (!r) return; const hello = setInterval(() => { if (relayUp) clearInterval(hello); else r.send({ h: 1 }); }, 500); });
   }
   function lost() { if (relayUp) { stat('Connected (relay)', true); return; } stat('Connection lost. Tap to reconnect.'); retry(); }

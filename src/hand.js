@@ -1,5 +1,8 @@
-// Camera control: your flat hand is the glider.
-// Fingertips up = climb, fingertips down = dive, roll the hand like a wing = turn, close a fist = boost.
+// Camera control, three ways:
+//  - 'palm' (the default, steadiest): show an open palm to the camera. Raise or lower the hand to climb or dive,
+//    tilt it like a steering wheel to turn, close a fist to boost. Position and a front-on palm are what the tracker reads best.
+//  - 'hand': your flat hand is the glider, fingertips pointing at the screen. Fingertips up/down, roll like a wing.
+//  - 'object': any held object, followed by its colours (objtrack.js).
 // Works with either hand and follows whichever hand you bring up.
 
 import { obj, objStartLearning, objStep, objDraw } from './objtrack.js';
@@ -16,8 +19,11 @@ const CAM_VFOV = 0.72;        // typical webcam vertical field of view, radians
 const load = (k, d) => { try { const v = JSON.parse(localStorage.getItem('flyer.' + k)); return v == null ? d : v; } catch (_) { return d; } };
 const save = (k, v) => { try { localStorage.setItem('flyer.' + k, JSON.stringify(v)); } catch (_) {} };
 const OBJ_RANGE = { up: 0.45, down: 0.45, out: 0.55, inn: 0.55 };
-const rangeKey = () => (hand.mode === 'object' ? 'objRange' : 'handRange'), rangeDef = () => (hand.mode === 'object' ? OBJ_RANGE : DEFAULT_RANGE);
-let range = Object.assign({}, DEFAULT_RANGE, load('handRange', null) || {});
+// palm mode: pitch is height in palm-lengths x 0.35 (so ~1.2 palm-lengths up or down is full), roll is radians of tilt
+const PALM_RANGE = { up: 0.42, down: 0.42, out: 0.5, inn: 0.5 };
+const MODES = ['palm', 'hand', 'object'];
+const rangeKey = () => (hand.mode === 'object' ? 'objRange' : hand.mode === 'palm' ? 'palmRange' : 'handRange'), rangeDef = () => (hand.mode === 'object' ? OBJ_RANGE : hand.mode === 'palm' ? PALM_RANGE : DEFAULT_RANGE);
+let range = Object.assign({}, DEFAULT_RANGE);
 let pushFrames = 0;
 let learning = false, peak = { up: 0, down: 0, out: 0, inn: 0 };
 
@@ -41,7 +47,7 @@ function load0(k, d) { try { const v = JSON.parse(localStorage.getItem('flyer.' 
 
 export const hand = {
   enabled: false,      // camera control switched on
-  mode: load0('camMode', 'hand'),   // 'hand' = bare hand, 'object' = any held object
+  mode: MODES.includes(load0('camMode2', 'palm')) ? load0('camMode2', 'palm') : 'palm',   // 'palm' | 'hand' | 'object' (see top)
   status: 'off',       // off | starting | ready | error
   error: '',
   tracking: false,     // a hand is being followed right now
@@ -78,9 +84,9 @@ export function commitRangeLearning() {
   save(rangeKey(), range);
 }
 /** Switch between bare-hand and any-object tracking. */
-export function setCamMode(m) { hand.mode = m === 'object' ? 'object' : 'hand'; save('camMode', hand.mode); range = Object.assign({}, rangeDef(), load(rangeKey(), null) || {}); hand.fist = false; requestCalibration(); }
+export function setCamMode(m) { hand.mode = MODES.includes(m) ? m : 'palm'; save('camMode2', hand.mode); range = Object.assign({}, rangeDef(), load(rangeKey(), null) || {}); hand.fist = false; requestCalibration(); }
 export function resetHandRange() { range = Object.assign({}, rangeDef()); save(rangeKey(), range); }
-export function requestCalibration() { fPitch.reset(); fRoll.reset(); histP = []; histR = []; if (hand.mode === 'object') objStartLearning(); wantCalib = true; hand.calibrated = false; calibHold = 0; calibN = 0; calibSumP = calibSumR = 0; hand.calibProgress = 0; }
+export function requestCalibration() { palmLen = 0; fPitch.reset(); fRoll.reset(); histP = []; histR = []; if (hand.mode === 'object') objStartLearning(); wantCalib = true; hand.calibrated = false; calibHold = 0; calibN = 0; calibSumP = calibSumR = 0; hand.calibProgress = 0; }
 
 /** Pure maths, exported so it can be tested without a camera.
  *  The hand is held flat, palm down, fingers pointing at the screen. Seen from the camera that pose makes depth
@@ -104,6 +110,24 @@ export function attitude(lm, world, aspect) {
   const w = world[0], palm = Math.hypot(world[9].x - w.x, world[9].y - w.y, world[9].z - w.z) || 1e-3;
   let o = 0; for (const i of TIPS) o += Math.hypot(world[i].x - w.x, world[i].y - w.y, world[i].z - w.z);
   return { pitch, roll, openness: o / 4 / palm };
+}
+
+/** Palm mode. The open palm faces the camera, which is the view the tracker is trained on most.
+ *  pitch = how high the palm centre sits, in palm-lengths (scaled), so it works near or far from the camera
+ *  roll  = the steering-wheel tilt: wrist-to-middle-knuckle direction and the knuckle line, averaged
+ *  palmLen: a steadied palm length (square units) from the caller, so a wobbling size does not wobble the height. */
+export function palmAttitude(lm, world, aspect, palmLen) {
+  const X = p => (1 - p.x) * aspect, Y = p => p.y;
+  const cy = (Y(lm[0]) + Y(lm[5]) + Y(lm[9]) + Y(lm[13]) + Y(lm[17])) / 5;
+  const ux = X(lm[9]) - X(lm[0]), uy = Y(lm[9]) - Y(lm[0]);
+  const len = Math.hypot(ux, uy) || 1e-4;
+  const r1 = Math.atan2(ux, -uy);                                       // + = top of the hand leaning to the player's right
+  let kx = X(lm[5]) - X(lm[17]), ky = Y(lm[5]) - Y(lm[17]); if (kx < 0) { kx = -kx; ky = -ky; }
+  const r2 = Math.atan2(ky, kx);                                        // + = right end of the knuckle line lower
+  const roll = Math.abs(r1 - r2) < 0.5 ? (r1 + r2) / 2 : r1;           // the knuckle line is unreliable when the hand turns side-on
+  const w = world[0], palm = Math.hypot(world[9].x - w.x, world[9].y - w.y, world[9].z - w.z) || 1e-3;
+  let o = 0; for (const i of TIPS) o += Math.hypot(world[i].x - w.x, world[i].y - w.y, world[i].z - w.z);
+  return { pitch: -cy / (palmLen || len) * 0.35, roll, openness: o / 4 / palm, len, cy };
 }
 
 // dead zone at the centre, then a curve that is gentle near level and firm toward the end of the reach
@@ -171,7 +195,7 @@ export function updateHand(now) {
   smoothP += (tp - smoothP) * g; smoothR += (tr - smoothR) * g;
   hand.rawPitch = smoothP; hand.rawRoll = smoothR;
   // a palm-down hand rolls outward (thumb rising) further than inward, and which way is "outward" depends on the hand
-  const rightHand = hand.side !== 'left', bankRight = smoothR > 0, outward = hand.mode === 'object' ? true : bankRight === rightHand;
+  const rightHand = hand.side !== 'left', bankRight = smoothR > 0, outward = hand.mode !== 'hand' ? true : bankRight === rightHand;
   hand.pitch = shape(smoothP * hand.sens, PITCH_DEAD, smoothP > 0 ? range.up : range.down);
   hand.roll = shape(-smoothR * hand.sens, ROLL_DEAD, outward ? range.out : range.inn);   // + = turn left, matching the game's arms
   if (learning && hand.tracking && hand.calibrated && !hand.fist) {
@@ -212,8 +236,15 @@ function measureObject(now) {
   if (hand.fist && !wasFist && hand.calibrated) for (const cb of fistCbs) { try { cb(); } catch (_) {} }
 }
 
+let palmLen = 0, neutralCy = -1;
 function measure(h, now) {
-  const a = attitude(h.lm, h.wl, video.videoWidth / (video.videoHeight || 1));
+  const aspect = video.videoWidth / (video.videoHeight || 1);
+  let a;
+  if (hand.mode === 'palm') {
+    const a0 = palmAttitude(h.lm, h.wl, aspect, palmLen);
+    if (a0.openness > 1.5) palmLen = palmLen ? palmLen + (a0.len - palmLen) * 0.04 : a0.len;   // a slow average: size barely affects the reading
+    a = palmLen ? palmAttitude(h.lm, h.wl, aspect, palmLen) : a0;
+  } else a = attitude(h.lm, h.wl, aspect);
   const dt = clamp(lastMeasureT ? (now - lastMeasureT) / 1000 : 1 / 30, 1 / 120, 0.2); lastMeasureT = now;
   lastSeen = now; hand.openness = a.openness;
   // a fist must hold for a few camera frames, so one bad frame cannot fire the boost or freeze the steering
@@ -228,7 +259,7 @@ function measure(h, now) {
     const steady = Math.abs(a.pitch - p) < 0.07 && Math.abs(a.roll - r) < 0.07 && a.openness > 1.5;
     if (steady) { calibSumP += p; calibSumR += r; calibN++; } else { calibSumP = calibSumR = 0; calibN = 0; }
     hand.calibProgress = clamp(calibN / 24, 0, 1);
-    if (calibN >= 24) { neutral = { pitch: calibSumP / calibN, roll: calibSumR / calibN }; wantCalib = false; hand.calibrated = true; hand.calibProgress = 1; smoothP = smoothR = 0; }
+    if (calibN >= 24) { neutral = { pitch: calibSumP / calibN, roll: calibSumR / calibN }; neutralCy = hand.mode === 'palm' ? a.cy : -1; wantCalib = false; hand.calibrated = true; hand.calibProgress = 1; smoothP = smoothR = 0; }
   }
   raw.pitch = p - neutral.pitch; raw.roll = r - neutral.roll;
 }
@@ -248,6 +279,11 @@ function draw() {
       g.save(); g.translate(W, 0); g.scale(-1, 1); g.globalAlpha = 0.62; g.drawImage(video, ox, oy, dw, dh); g.restore(); g.globalAlpha = 1;
       if (hand.mode === 'object') objDraw(g, ox, oy, dw, dh);
       const px = p => W - (ox + p.x * dw), py = p => oy + p.y * dh;
+      if (hand.mode === 'palm' && hand.calibrated && neutralCy >= 0) {   // where "level" is: hand above the line climbs, below dives
+        const ly = oy + neutralCy * dh; g.strokeStyle = 'rgba(155,224,138,.55)'; g.lineWidth = 2; g.setLineDash([8, 6]);
+        g.beginPath(); g.moveTo(0, ly); g.lineTo(W, ly); g.stroke(); g.setLineDash([]);
+        g.fillStyle = 'rgba(155,224,138,.8)'; g.font = '600 ' + Math.max(9, Math.round(W / 34)) + 'px system-ui,sans-serif'; g.fillText('level', 8, ly - 6);
+      }
       hands.forEach((h, i) => {
         const act = i === activeIdx, col = act ? (hand.fist ? '#86f0ff' : '#ffb04a') : 'rgba(255,246,234,.35)';
         g.lineCap = 'round'; g.strokeStyle = col; g.lineWidth = act ? Math.max(2, W / 110) : 1.5;
@@ -272,7 +308,7 @@ function draw() {
       g.fillStyle = g.strokeStyle; g.beginPath(); g.arc(0, 0, r * 0.11, 0, 7); g.fill(); g.restore();
     }
     // status strip
-    const msg = hand.status === 'starting' ? 'Starting camera…' : hand.mode === 'object' ? (obj.state === 'empty' ? 'Keep the box empty' : obj.state !== 'tracking' ? 'Hold your object in the box' : !hand.tracking ? 'Object lost: bring it back' : hand.fist ? 'Push: boost' : 'OBJECT · tracking') : !hand.tracking ? 'Point a flat hand at the screen' : !hand.calibrated ? 'Hold your hand flat and still' : hand.fist ? 'Fist: boost' : (hand.side ? hand.side.toUpperCase() + ' HAND' : 'HAND') + ' · tracking';
+    const msg = hand.status === 'starting' ? 'Starting camera…' : hand.mode === 'object' ? (obj.state === 'empty' ? 'Keep the box empty' : obj.state !== 'tracking' ? 'Hold your object in the box' : !hand.tracking ? 'Object lost: bring it back' : hand.fist ? 'Push: boost' : 'OBJECT · tracking') : !hand.tracking ? (hand.mode === 'palm' ? 'Show your open palm' : 'Point a flat hand at the screen') : !hand.calibrated ? 'Hold your hand flat and still' : hand.fist ? 'Fist: boost' : (hand.side ? hand.side.toUpperCase() + ' HAND' : 'HAND') + ' · tracking';
     g.font = '700 ' + Math.max(10, Math.round(W / 22)) + 'px "Bricolage Grotesque",system-ui,sans-serif'; g.textBaseline = 'top';
     const tw = g.measureText(msg).width; g.fillStyle = 'rgba(13,16,32,.72)'; g.fillRect(6, 6, tw + 14, Math.max(10, W / 22) + 10);
     g.fillStyle = hand.tracking && hand.calibrated ? '#9be08a' : '#ffb04a'; g.fillText(msg, 13, 11);

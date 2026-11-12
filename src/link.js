@@ -29,15 +29,22 @@ let relay = null, relayAcked = false;
 function onData(d, viaRelay) {
   if (!d) return;
   if (viaRelay) { if (!relayAcked && relay) { relayAcked = true; relay.send({ k: 1 }); } if (phone.status === 'waiting' || phone.status === 'starting') phone.status = 'connected'; phone.via = conn && conn.open ? 'direct' : 'relay'; }
-  if (Array.isArray(d)) { phone.pitch = +d[0] || 0; phone.roll = +d[1] || 0; lastMsg = performance.now(); }
+  if (Array.isArray(d)) {
+    const t = performance.now(), p = +d[0] || 0, r = +d[1] || 0, gap = Math.max(0.008, (t - lastMsg) / 1000);
+    // how fast the tilt is changing, so the screen can run slightly ahead between messages instead of trailing them
+    if (lastMsg && gap < 0.15) { vp += ((p - phone.pitch) / gap - vp) * 0.5; vr += ((r - phone.roll) / gap - vr) * 0.5; } else { vp = vr = 0; }
+    phone.pitch = p; phone.roll = r; lastMsg = t; phone.via = conn && conn.open ? 'direct' : 'relay';
+  }
+  else if (d.q) { const rtt = performance.now() - d.q; if (rtt >= 0 && rtt < 5000) phone.ms = phone.ms ? phone.ms * 0.7 + rtt / 2 * 0.3 : rtt / 2; }
   else if (d.h && relay) relay.send({ k: 1 });
   else if (d.b) for (const cb of boostCbs) { try { cb(); } catch (_) {} }
 }
-let peer = null, conn = null, lastMsg = 0, sp = 0, sr = 0, lastT = 0;
+let peer = null, conn = null, lastMsg = 0, sp = 0, sr = 0, lastT = 0, vp = 0, vr = 0, lastPing = 0;
 const boostCbs = [];
 export function onPhoneBoost(cb) { boostCbs.push(cb); }
 export function setPhoneSens(v) { phone.sens = clamp(+v || 1, 0.6, 1.6); save('padSens', phone.sens); }
-export function phoneBuzz(pattern) { if (conn && conn.open) try { conn.send({ v: pattern }); } catch (_) {} else if (relay && relayAcked) relay.send({ v: pattern }); }
+function toPhone(d) { if (conn && conn.open) try { conn.send(d); } catch (_) {} else if (relay && relayAcked) relay.send(d); }
+export function phoneBuzz(pattern) { toPhone({ v: pattern }); }
 
 export function hostPhone() {
   if (peer && !peer.destroyed) return;
@@ -62,14 +69,18 @@ export function hostPhone() {
     phone.status = 'error'; phone.error = 'Could not set up the phone link (' + (e && e.type ? e.type : e) + '). Check the internet connection and try again.';
   });
 }
-export function stopPhone() { try { if (peer) peer.destroy(); } catch (_) {} if (relay) relay.close(); relay = null; relayAcked = false; phone.code = ''; peer = null; conn = null; phone.status = 'off'; phone.live = false; phone.L = phone.R = 0; }
+export function stopPhone() { try { if (peer) peer.destroy(); } catch (_) {} if (relay) relay.close(); relay = null; relayAcked = false; phone.code = ''; peer = null; conn = null; phone.status = 'off'; phone.ms = 0; phone.via = ''; phone.live = false; phone.L = phone.R = 0; }
 
 /** Call once per frame. */
 export function updatePhone(now) {
   const dt = Math.min(0.1, lastT ? (now - lastT) / 1000 : 0.016); lastT = now;
   phone.live = phone.status === 'connected' && now - lastMsg < 600;
-  const g = 1 - Math.exp(-dt * (phone.live ? 30 : 6));   // glide between sensor messages; ease to level if they stop
-  sp += ((phone.live ? phone.pitch : 0) - sp) * g; sr += ((phone.live ? phone.roll : 0) - sr) * g;
+  if (phone.status === 'connected' && now - lastPing > 1000) { lastPing = now; toPhone({ p: now }); }   // measures the delay, shown on the setup screen
+  // aim a little ahead along the current motion (at most 50 ms), then glide there: hides the gaps between messages without trailing them
+  const age = Math.min(0.05, (now - lastMsg) / 1000), lead = phone.live ? 1 : 0;
+  const tp = phone.live ? phone.pitch + vp * age * lead : 0, tr = phone.live ? phone.roll + vr * age * lead : 0;
+  const g = 1 - Math.exp(-dt * (phone.live ? 55 : 6));   // ease to level if the messages stop
+  sp += (tp - sp) * g; sr += (tr - sr) * g;
   const p = shape(sp * phone.sens, PITCH_DEAD, PITCH_FULL), t = shape(-sr * phone.sens, ROLL_DEAD, ROLL_FULL);   // t + = turn left
   phone.L = phone.live ? clamp(p + t, -1, 1) : 0; phone.R = phone.live ? clamp(p - t, -1, 1) : 0;
   phone.sp = sp; phone.sr = sr;

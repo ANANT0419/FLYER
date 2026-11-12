@@ -66,6 +66,7 @@ try{post=createPost(renderer,scene,camera,{lite:isTouch});}catch(e){logIssue('Gr
 /* ================= helpers ================= */
 function mulberry(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
 const rnd=mulberry(20261013),rr=(a,b)=>a+(b-a)*rnd(),clamp=(v,a,b)=>v<a?a:v>b?b:v;
+const smoothstep=(a,b,x)=>{const t=clamp((x-a)/(b-a),0,1);return t*t*(3-2*t);};
 const smooth=(a,b,x)=>{const t=clamp((x-a)/(b-a),0,1);return t*t*(3-2*t);};
 const UP=new THREE.Vector3(0,1,0);
 const GLSL_NOISE=`float hash2(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
@@ -94,10 +95,22 @@ const FLOOR=35;const _c=new THREE.Vector3(),_r=new THREE.Vector3(),_t=new THREE.
 function frame(s){s=clamp(s,0,LEN);const f=s/STEP;const i=Math.min(S-2,Math.floor(f));const k=f-i;
   _c.copy(C[i]).lerp(C[i+1],k);_r.copy(R[i]).lerp(R[i+1],k).normalize();_t.copy(T[i]).lerp(T[i+1],k).normalize();}
 function floorY(s){s=clamp(s,0,LEN);const f=s/STEP;const i=Math.min(S-2,Math.floor(f));const k=f-i;return C[i].y+(C[i+1].y-C[i].y)*k-FLOOR;}
+// value noise for the rock walls and mountains (deterministic, so the ground under you always matches what you see)
+function h2(x,y){let h=(x*374761393+y*668265263)|0;h=Math.imul(h^(h>>>13),1274126177);return((h^(h>>>16))>>>0)/4294967296;}
+function vn(x,y){const xi=Math.floor(x),yi=Math.floor(y),xf=x-xi,yf=y-yi,u=xf*xf*(3-2*xf),v=yf*yf*(3-2*yf);
+  const a=h2(xi,yi),b=h2(xi+1,yi),c=h2(xi,yi+1),d=h2(xi+1,yi+1);return a+(b-a)*u+(c-a)*v+(a-b-c+d)*u*v;}
+// ridged noise: sharp crests and creased valleys, the shape of real mountain ridges
+function ridged(x,y,oct){let sum=0,amp=0.5,f=1,w=1,norm=0;for(let o=0;o<oct;o++){let n=1-Math.abs(vn(x*f,y*f)*2-1);n*=n;n*=w;w=clamp(n*1.6,0,1);sum+=n*amp;norm+=amp;amp*=0.5;f*=2.03;}return sum/norm;}
 function nz(s,d){return Math.sin(s*0.011+d*0.017)*0.5+Math.sin(s*0.027-d*0.031+1.7)*0.3+Math.sin(s*0.061+d*0.05+4.1)*0.2;}
 function relH(s,d){const ad=Math.abs(d),n=nz(s,d);let h=ad*0.05+n*2.4+Math.sin(s*0.09+d*0.13)*0.6;if(ad<26){const t=ad/26;h-=7*(1-t*t);}
-  if(ad>92){const w=(ad-92)/150;let hw=Math.pow(w,1.5)*270*(1+0.22*n)+Math.sin(s*0.05+d*0.08)*6*w+Math.sin(s*0.21+d*0.17)*2.5*w;
-    const st=20,q=Math.floor(hw/st)*st,f=(hw-q)/st;hw=hw*0.55+(q+st*f*f*f)*0.45;h+=hw;}return h;}
+  if(ad>92){const w=(ad-92)/150,side=d>0?1:-1;
+    // buttresses and gullies running down the walls, crags on top; each wall has its own pattern
+    const rg=ridged(s*0.0065+side*31.7,ad*0.006,4),cr=vn(s*0.045+side*7.3,ad*0.05);
+    const cliff=Math.min(1,w*2.6);                                   // a steep first rise: the canyon wall itself
+    let hw=(cliff*cliff*(3-2*cliff))*80*(0.7+0.6*rg)+(1-Math.exp(-w*w*1.1))*250*(0.78+0.44*rg)*(1+0.18*n)+rg*rg*150*smoothstep(0.7,1.4,w)+(cr-0.5)*9*w;   // canyon wall, shoulder, crags along the rim
+    hw+=Math.sin(s*0.05+d*0.08)*6*w+Math.sin(s*0.21+d*0.17)*2.5*w;
+    const st=17+6*rg,q=Math.floor(hw/st)*st,f=(hw-q)/st;hw=hw*0.5+(q+st*f*f*f*f)*0.5;   // ledges: rock strata breaking into steps
+    h+=hw;}return h;}
 function groundAt(s,d){const h=relH(s,d);return floorY(s)+(Math.abs(d)<23?Math.max(h,-3.0):h);}
 function worldAt(s,d,h,out){frame(s);out.copy(_c).addScaledVector(_r,d);out.y=floorY(s)+h;return out;}
 
@@ -158,7 +171,7 @@ vec3 col=mix(vec3(0.64,0.39,0.33),vec3(0.86,0.6,0.45),strata);col=mix(col,vec3(0
 
 /* ================= terrain (procedural detail per pixel) ================= */
 (function(){
-  const ROWSTEP=isTouch?3:2,rows=Math.floor((S-1)/ROWSTEP)+1,cols=isTouch?57:73,EXT=340;
+  const ROWSTEP=isTouch?3:2,rows=Math.floor((S-1)/ROWSTEP)+1,cols=isTouch?61:97,EXT=340;
   const pos=new Float32Array(rows*cols*3),aH=new Float32Array(rows*cols),aAd=new Float32Array(rows*cols);let p=0,q=0;
   for(let r=0;r<rows;r++){const i=Math.min(S-1,r*ROWSTEP),s=i*STEP,fy=C[i].y-FLOOR;
     for(let j=0;j<cols;j++){const t=j/(cols-1)*2-1,d=Math.sign(t)*Math.pow(Math.abs(t),1.35)*EXT,h=relH(s,d);
@@ -177,6 +190,9 @@ vec3 grass=mix(gA,gB,n1);grass=mix(grass,gDry,smoothstep(0.58,0.78,n2)*0.55);gra
 vec3 rA=vec3(0.66,0.40,0.34),rB=vec3(0.87,0.61,0.45),rD=vec3(0.42,0.27,0.30);
 float rg=vnoise(vec2(vW.x+vW.z,vW.y*1.6)*0.22);float strata=0.5+0.5*sin(vW.y*0.16+n1*4.0+rg*1.5);
 vec3 rock=mix(rA,rB,strata);rock=mix(rock,rD,smoothstep(0.55,0.85,n2)*0.5);rock*=0.86+0.22*rg;
+float streak=vnoise(vec2((vW.x-vW.z)*0.22,vW.y*0.012));rock*=1.0-0.28*smoothstep(0.55,0.85,streak)*slope;          // dark water streaks down the faces
+float crack=1.0-abs(vnoise(vec2((vW.x+vW.z)*0.035,vW.y*0.3))*2.0-1.0);rock*=1.0-0.2*smoothstep(0.9,0.98,crack)*slope; // cracks between the strata
+rock=mix(rock,vec3(0.93,0.74,0.56),smoothstep(0.35,0.08,slope)*0.25);                                                     // sunlit ledges
 grass=mix(grass,gDark*1.05,smoothstep(10.0,70.0,vH)*0.45);
 float rockMix=clamp(smoothstep(0.5,0.8,slope+(n2-0.5)*0.3)+smoothstep(95.0,150.0,vH)*0.75,0.0,1.0);
 vec3 col=mix(grass,rock,rockMix);
@@ -186,6 +202,21 @@ float sandM=(1.0-smoothstep(23.0,31.0,vAd+n2*5.0))*(1.0-smoothstep(1.0,4.0,vH));
 float cs=smoothstep(0.5,0.72,fbm(vW.xz*0.0042+vec2(uTime*0.004,uTime*0.013)));col*=1.0-0.22*cs;
 diffuseColor.rgb=col;`);};
   const m=new THREE.Mesh(g,mat);m.frustumCulled=false;scene.add(m);
+  // the mountain ranges beyond the gorge rim: a heightfield laid out on the ground (so it never folds on the bends),
+  // its height set by how far each point is from the gorge
+  {const STEPF=isTouch?60:42,x0=-1900,x1=1900,z0=1600,z1=Math.min(...C.map(c=>c.z))-1600,nx=Math.ceil((x1-x0)/STEPF)+1,nzc=Math.ceil((z0-z1)/STEPF)+1;
+   const fp=new Float32Array(nx*nzc*3),fh=new Float32Array(nx*nzc),fd=new Float32Array(nx*nzc);let k=0;
+   for(let iz=0;iz<nzc;iz++)for(let ix=0;ix<nx;ix++){const x=x0+ix*STEPF,z=z0-iz*STEPF;
+     let bi=0,bd=Infinity;for(let i=0;i<S;i+=10){const dx=x-C[i].x,dz=z-C[i].z,dd=dx*dx+dz*dz;if(dd<bd){bd=dd;bi=i;}}
+     for(let i=Math.max(0,bi-10);i<=Math.min(S-1,bi+10);i++){const dx=x-C[i].x,dz=z-C[i].z,dd=dx*dx+dz*dz;if(dd<bd){bd=dd;bi=i;}}
+     const dist=Math.sqrt(bd),fy=C[bi].y-FLOOR;
+     const rg=ridged(x*0.0011+5.3,z*0.0011-2.1,6),big=vn(x*0.00042+9.1,z*0.00042+3.7);
+     let hh=(320+560*smoothstep(340,1000,dist)-300*smoothstep(1500,2100,dist))*(0.5+0.8*rg)*(0.8+0.4*big);
+     if(dist<360)hh=Math.min(hh,relH(bi*STEP,dist)-30-Math.max(0,340-dist)*0.3);   // tucked under the gorge walls
+     fp[k*3]=x;fp[k*3+1]=fy+hh;fp[k*3+2]=z;fh[k]=hh*0.5;fd[k]=dist;k++;}   // half height for the colouring: snow only on the high peaks
+   const fi=[];for(let iz=0;iz<nzc-1;iz++)for(let ix=0;ix<nx-1;ix++){const a=iz*nx+ix,b=a+1,c=a+nx,d=c+1;fi.push(a,b,c,b,d,c);}
+   const fg=new THREE.BufferGeometry();fg.setAttribute('position',new THREE.BufferAttribute(fp,3));fg.setAttribute('aH',new THREE.BufferAttribute(fh,1));fg.setAttribute('aAd',new THREE.BufferAttribute(fd,1));
+   fg.setIndex(fi);fg.computeVertexNormals();const fm=new THREE.Mesh(fg,mat);fm.frustumCulled=false;scene.add(fm);}
   // river with moving light
   const wr=Math.floor((S-1)/2)+1,wp=new Float32Array(wr*2*3),wu=new Float32Array(wr*2*2);
   for(let r=0;r<wr;r++){const i=Math.min(S-1,r*2),fy=C[i].y-FLOOR-3.2;for(let k=0;k<2;k++){const d=k?22:-22,o=(r*2+k)*3;wp[o]=C[i].x+R[i].x*d;wp[o+1]=fy;wp[o+2]=C[i].z+R[i].z*d;wu[(r*2+k)*2]=k;wu[(r*2+k)*2+1]=i*STEP;}}
@@ -206,7 +237,7 @@ diffuseColor.rgb=col;`);};
   for(let i=0;i<N;i++){const s=rr(-200,LEN+200),side=rnd()<0.5?-1:1,d=side*rr(430,950);frame(clamp(s,0,LEN));v.copy(_c).addScaledVector(_r,d);if(s<0)v.addScaledVector(_t,s);if(s>LEN)v.addScaledVector(_t,s-LEN);
     const base=floorY(clamp(s,0,LEN))-90,Rr=rr(120,260),H=rr(260,560);v.y=base;q.setFromAxisAngle(UP,rnd()*6.28);sc.set(Rr,H,Rr);m.compose(v,q,sc);body.setMatrixAt(i,m);body.setColorAt(i,c.copy(a).lerp(b,rnd()));
     v.y=base+H*0.74;sc.set(Rr*0.26,H*0.26,Rr*0.26);m.compose(v,q,sc);cap.setMatrixAt(i,m);}
-  body.frustumCulled=false;cap.frustumCulled=false;scene.add(body,cap);
+  // replaced by the mountain-range heightfield; the loop above still runs so the random layout after it is unchanged
 })();
 
 /* ================= spires (kept off the current) ================= */
@@ -709,7 +740,7 @@ function readInput(dt){
   else{input.mL=ease(input.mL,0,5);input.mR=ease(input.mR,0,5);}
   if(settings.control==='phone'&&phone.status!=='off'){remote.active=phone.live;remote.L=phone.L;remote.R=phone.R;remote.tl=remote.tr=remote.active;if(remote.active&&keysDown.size===0&&!mouse&&touches.size===0)noteInput('remote');}
   else if(hand.enabled){remote.active=hand.tracking&&hand.calibrated;remote.L=hand.L;remote.R=hand.R;remote.tl=remote.tr=remote.active;if(remote.active&&settings.control==='camera'&&keysDown.size===0&&!mouse&&touches.size===0)noteInput('remote');}else remote.active=false;
-  input.rL=ease(input.rL,remote.active?remote.L:0,20);input.rR=ease(input.rR,remote.active?remote.R:0,20);
+  const rRate=settings.control==='phone'?70:20;input.rL=ease(input.rL,remote.active?remote.L:0,rRate);input.rR=ease(input.rR,remote.active?remote.R:0,rRate);
   const s=settings.sens;return {L:clamp((input.tL+input.kL+input.mL+input.rL)*s,-1,1),R:clamp((input.tR+input.kR+input.mR+input.rR)*s,-1,1)};
 }
 function drawThumbs(){
@@ -883,10 +914,20 @@ const STEPS=[
  ['Bring the phone back to flat. The suit levels out by itself.','phone flat'],['Roll the phone to the left, like a plane banking. You lean and curve left.','roll left'],
  ['Roll the phone to the right. You lean and curve right.','roll right'],null,null,null,['Tap the phone screen to fire your pack. Gold rings refill the boost meter.','tap the phone']
 ].forEach((x,i)=>{if(!x)return;STEPS[i].text.phone=x[0];STEPS[i].alt.phone=x[1];});
-function tutText(st){const m=ctlMode();return st.text.all||st.text[m]||st.text.two;}
+[['Hold one hand up facing the camera, open palm, like a wave hello. Your hand is the control stick.','open palm up','Hold your object up in front of the camera, the way you set it up.','object in view'],
+ ['Lower your hand a little. You tip forward and pick up speed.','hand lower','Lower your object. You tip forward and pick up speed.','object lower'],
+ ['Raise your hand. You rise, trading speed for height.','hand higher','Raise your object. You rise, trading speed for height.','object higher'],
+ ['Bring your hand back to where it started, upright. The suit levels out by itself.','hand back to level','Bring your object back to where it started. The suit levels out by itself.','object back to level'],
+ ['Tilt your hand to the left, like turning a steering wheel. You lean and curve left.','tilt hand left','Tilt your object to the left. You lean and curve left.','tilt left'],
+ ['Tilt your hand to the right. You lean and curve right.','tilt hand right','Tilt your object to the right. You lean and curve right.','tilt right'],
+ null,null,null,
+ ['Close your hand into a fist, then open it again, to fire your pack. Gold rings refill the boost meter.','close a fist','Push your object quickly toward the camera to fire your pack. Gold rings refill the boost meter.','push toward camera']
+].forEach((x,i)=>{if(!x)return;const st=STEPS[i];st.text.palm=x[0];st.alt.palm=x[1];st.text.object=x[2];st.alt.object=x[3];});
+const tutKey=()=>{const m=ctlMode();return m==='hand'&&hand.mode!=='hand'?hand.mode:m;};
+function tutText(st){const m=tutKey();return st.text.all||st.text[m]||st.text.two;}
 function tutAlt(st){if(!st.alt)return '';const m=ctlMode();const isPhone=m==='two'||m==='one';
   const others=(isTouch?[settings.mode]:[settings.control==='arms'?'keys':'simple','mouse']).concat(hand.enabled?['hand']:[]).concat(phone.status==='connected'?['phone']:[]).filter(k=>k!==m&&!(isPhone&&(k==='two'||k==='one')));if(!others.length)return '';
-  return 'Also: '+others.map(k=>DEV[k]+' · '+st.alt[k]).join('   |   ');}
+  return 'Also: '+others.map(k=>DEV[k]+' · '+st.alt[k==='hand'&&hand.mode!=='hand'?hand.mode:k]).join('   |   ');}
 function setPad(pad,zone,ghost){const z=pad.querySelector('.zone'),g=pad.querySelector('.ghost');
   const flip=c=>settings.invert&&(c==='u'||c==='d')?(c==='u'?'d':'u'):c;z.className='zone '+flip(zone);g.className='ghost '+flip(ghost);}
 function padKeys(){const m=ctlMode(),arm=m==='mouse'||m==='simple'||m==='hand'||m==='phone';$('padLk').textContent=m==='keys'?'W / S':arm?'LEFT ARM':'LEFT';$('padRk').textContent=m==='keys'?'↑ / ↓':arm?'RIGHT ARM':'RIGHT';}
@@ -907,9 +948,11 @@ function tutFinish(){store.set('tutDone',true);G.state='tutdone';$('coach').hidd
 $('cSkip').onclick=()=>{if(G.mode!=='tut')return;if(tut.i+1<STEPS.length)tutEnter(tut.i+1);else tutFinish();};
 
 /* ================= camera ================= */
+const SKYVIEW=new URLSearchParams(location.search).get('view')==='sky';   // ?view=sky: menu camera high above the gorge, for checking scenery
+if(SKYVIEW){scene.fog.near=1500;scene.fog.far=7000;}
 const camPos=new THREE.Vector3(),camLook=new THREE.Vector3(),back=new THREE.Vector3(),CUP=new THREE.Vector3(0,4.2,0);
 function updateCamera(dt,snap){
-  if(G.state==='menu'){G.menuS=(G.menuS+24*dt)%(LEN-400);streamPoint(G.menuS,camPos);camPos.y+=22;streamPoint(G.menuS+80,camLook);
+  if(G.state==='menu'){G.menuS=(G.menuS+24*dt)%(LEN-400);streamPoint(G.menuS,camPos);camPos.y+=SKYVIEW?900:22;streamPoint(G.menuS+(SKYVIEW?900:80),camLook);
     camera.position.lerp(camPos,snap?1:Math.min(1,dt*2));camera.lookAt(camLook);camera.fov=62;camera.updateProjectionMatrix();return;}
   if(settings.view==='fp'){camPos.copy(G.pos).addScaledVector(dir,0.8);camPos.y+=0.65;const gy0=groundAt(G.s,G.d)+1.2;if(camPos.y<gy0)camPos.y=gy0;
     camera.position.lerp(camPos,snap?1:1-Math.exp(-dt*22));camLook.copy(G.pos).addScaledVector(dir,30);camera.lookAt(camLook);camera.rotateZ(G.roll*0.85);
@@ -1031,23 +1074,25 @@ function closeCamSetup(use){$('camSetup').hidden=true;
 for(const b of document.querySelectorAll('.ctlcard'))b.onclick=()=>{if(G.state==='menu')setControl(b.dataset.ctl);};
 $('camDone').onclick=()=>closeCamSetup(true);$('camCancel').onclick=()=>closeCamSetup(false);$('camRecalBtn').onclick=()=>{resetHandRange();beginRangeLearning();for(const k in ck)ck[k]=false;requestCalibration();};
 $('handSens').addEventListener('input',e=>setHandSens(e.target.value));
-function syncCamMode(){for(const b of $('camModeSeg').querySelectorAll('button'))b.setAttribute('aria-pressed',String(b.dataset.cam===hand.mode));const o=hand.mode==='object';
-  $('camTitle').textContent=o?'Any object is the glider':'Your hand is the glider';
-  const L=o?[['Raise it','climb'],['Lower it','dive'],['Tilt left','turn left'],['Tilt right','turn right'],['Push toward the camera','boost']]:[['Fingertips up','climb'],['Fingertips down','dive'],['Tilt left','turn left'],['Tilt right','turn right'],['Close a fist','boost']];
+function syncCamMode(){for(const b of $('camModeSeg').querySelectorAll('button'))b.setAttribute('aria-pressed',String(b.dataset.cam===hand.mode));const o=hand.mode==='object',pm=hand.mode==='palm';
+  $('camTitle').textContent=o?'Any object is the glider':pm?'Your palm is the control stick':'Your hand is the glider';
+  const L=o?[['Raise it','climb'],['Lower it','dive'],['Tilt left','turn left'],['Tilt right','turn right'],['Push toward the camera','boost']]
+    :pm?[['Raise your hand','climb'],['Lower your hand','dive'],['Tilt it left, like a wheel','turn left'],['Tilt it right','turn right'],['Close a fist','boost']]:[['Fingertips up','climb'],['Fingertips down','dive'],['Tilt left','turn left'],['Tilt right','turn right'],['Close a fist','boost']];
   ['Up','Down','Left','Right','Fist'].forEach((k,i)=>{$('ck'+k).innerHTML='';$('ck'+k).append(L[i][0]+' ');const s=document.createElement('span');s.textContent=L[i][1];$('ck'+k).append(s);});}
 for(const b of $('camModeSeg').querySelectorAll('button'))b.onclick=()=>{setCamMode(b.dataset.cam);beginRangeLearning();for(const k in ck)ck[k]=false;syncCamMode();};
 syncCamMode();
 window.addEventListener('keydown',e=>{if((e.key==='c'||e.key==='C')&&hand.enabled&&!e.repeat){requestCalibration();toast('Hold your hand flat','good');}});
 /* phone glider pairing */
 let qrFor='';
-function openPhoneSetup(){if(hand.enabled||hand.status!=='off')disableHand();$('phoneSetup').hidden=false;$('padSens').value=phone.sens;if(phone.status==='off'||phone.status==='error'){stopPhone();hostPhone();}}
+const pk={Up:false,Down:false,Left:false,Right:false,Tap:false};
+function openPhoneSetup(){if(hand.enabled||hand.status!=='off')disableHand();for(const k in pk)pk[k]=false;$('phoneSetup').hidden=false;$('padSens').value=phone.sens;if(phone.status==='off'||phone.status==='error'){stopPhone();hostPhone();}}
 function closePhoneSetup(use){$('phoneSetup').hidden=true;
   if(use&&phone.status==='connected'){settings.control='phone';store.set('control','phone');lastInput='remote';}
   else{stopPhone();settings.control=camPrev;store.set('control',camPrev);}
   syncControlUI();}
 $('padDone').onclick=()=>closePhoneSetup(true);$('padCancel').onclick=()=>closePhoneSetup(false);$('padSens').addEventListener('input',e=>setPhoneSens(e.target.value));
-onPhoneBoost(()=>{if(G.state==='play')tryBoost();});
-let padLostSince=0;
+onPhoneBoost(()=>{if(!$('phoneSetup').hidden)pk.Tap=true;if(G.state==='play')tryBoost();});
+let padLostSince=0,padSlowLogged=false;
 function phoneHud(now){
   if(!$('phoneSetup').hidden){
     if(phone.url&&qrFor!==phone.url){qrFor=phone.url;$('padUrl').textContent=phone.url;QRCode.toCanvas($('padQR'),phone.url,{width:360,margin:1,color:{dark:'#191d2e',light:'#fff6ea'}},err=>{if(err)logIssue('Phone glider','Could not draw the QR code: '+err.message);});}
@@ -1055,8 +1100,13 @@ function phoneHud(now){
       :phone.live?'Connected. Tilt the phone and watch the bar follow. Hold it flat and press “Set level” on the phone if it sits off-centre.':'Connected. Waiting for the phone to send its tilt…';
     $('padDone').disabled=phone.status!=='connected';
     $('padDial').style.transform='translateY('+(-(phone.sp||0)*1.1).toFixed(1)+'px) rotate('+(phone.sr||0).toFixed(1)+'deg)';
+    if(phone.live){const sp=phone.sp||0,sr=phone.sr||0;if(sp>9)pk.Up=true;if(sp<-9)pk.Down=true;if(sr<-11)pk.Left=true;if(sr>11)pk.Right=true;}
+    for(const k in pk)$('pk'+k).classList.toggle('ok',pk[k]);
+    if(phone.status==='connected'){const ms=Math.round(phone.ms||0),relay=phone.via==='relay';
+      $('padLink').textContent=(relay?'Linked through the relay (slower). Put both devices on the same Wi‑Fi for the direct link.':'Linked directly.')+(ms?' Delay about '+ms+' ms'+(ms>60?' — that is high; the same Wi‑Fi, closer to the router, helps.':'.'):'');}
   }
   if(settings.control==='phone'&&G.state==='play'){
+    if(phone.ms>110&&!padSlowLogged){padSlowLogged=true;logIssue('Phone glider','The phone link is slow (about '+Math.round(phone.ms)+' ms, '+(phone.via==='relay'?'through the relay':'direct')+'). Same Wi‑Fi for both devices makes it quicker.');}
     if(phone.live)padLostSince=0;else{if(!padLostSince)padLostSince=now;if(now-padLostSince>2500){pause();$('pauseNote').textContent='Paused because the phone stopped sending its tilt. Wake the phone and check it still says Connected, then resume.';}}
   }
 }
@@ -1068,6 +1118,8 @@ function handHud(now){
       :hand.mode==='object'&&!hand.calibrated&&hand.objState!=='learning'?'Step 1: keep the dashed box free of your object for a moment, so I can see you and the room without it. Pick something whose colour stands out from your clothes.'
       :hand.mode==='object'&&!hand.calibrated?'Step 2: now hold your object inside the dashed box, the way you want to hold it when level, and keep it still while I learn it.'
       :hand.mode==='object'&&!hand.tracking?'I lost the object. Bring it back into view, or press Start over to learn it again.'
+      :hand.mode==='palm'&&!hand.tracking?'Hold one hand up facing the camera, open palm, fingers up, like a wave hello. Keep your elbow relaxed, about chest height.'
+      :hand.mode==='palm'&&!hand.calibrated?'Good. Hold it still for a moment where it feels comfortable: that height becomes level.'
       :!hand.tracking?'Hold one hand out toward the screen: flat, palm down, fingertips pointing straight at the camera, like a paper plane flying into it.':!hand.calibrated?'Good. Keep it flat and still for a moment so I can learn your level position.'
       :'You are flying it. Now do each move below as far as feels comfortable. I set the sensitivity from your own reach.';
     if(hand.tracking&&hand.calibrated){if(hand.rawPitch>0.26)ck.Up=true;if(hand.rawPitch<-0.26)ck.Down=true;if(hand.rawRoll<-0.24)ck.Left=true;if(hand.rawRoll>0.24)ck.Right=true;}
