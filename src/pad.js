@@ -6,7 +6,7 @@ export function startPad(code) {
   document.title = 'Flyer glider';
   document.documentElement.classList.add('padmode');
   document.body.innerHTML = `
-  <main class="pad" id="pad">
+  <main class="padpage" id="pad">
     <div class="padtop"><span class="eyebrow">Flyer · phone glider</span><span class="padstat" id="padStat">Not connected</span></div>
     <div class="padstage" id="padStage">
       <div class="paddial"><div class="padhorizon"></div><div class="padwing" id="padWing"><i></i></div></div>

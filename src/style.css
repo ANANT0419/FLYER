@@ -235,7 +235,7 @@ h2{margin:0;font-size:clamp(26px,5vw,36px);font-weight:800;letter-spacing:-.03em
 .touch .ctlcard[data-ctl="phone"]{display:none}
 /* phone glider: the phone itself */
 .padmode,.padmode body{height:100%;background:#12152a}
-.pad{position:fixed;inset:0;display:flex;flex-direction:column;gap:12px;padding:calc(env(safe-area-inset-top,0px) + 14px) 16px calc(env(safe-area-inset-bottom,0px) + 14px)}
+.padpage{position:fixed;inset:0;width:auto;height:auto;display:flex;flex-direction:column;gap:12px;padding:calc(env(safe-area-inset-top,0px) + 14px) 16px calc(env(safe-area-inset-bottom,0px) + 14px)}
 .padtop{display:flex;justify-content:space-between;align-items:center;gap:10px}
 .padstat{font-size:13px;font-weight:700;color:var(--saffron);text-align:right}
 .padstat.ok{color:var(--good)}
