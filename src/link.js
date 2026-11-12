@@ -2,6 +2,7 @@
 // Its motion sensors measure tilt directly, so this is the steadiest way to fly. The two devices talk straight
 // to each other (WebRTC); a public PeerJS server is used only to introduce them.
 import { Peer } from 'peerjs';
+import { joinRelay } from './relay.js';
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const load = (k, d) => { try { const v = JSON.parse(localStorage.getItem('flyer.' + k)); return v == null ? d : v; } catch (_) { return d; } };
@@ -24,11 +25,19 @@ export const phone = {
   L: 0, R: 0,           // arm values for the game
   sens: load('padSens', 1),
 };
+let relay = null, relayAcked = false;
+function onData(d, viaRelay) {
+  if (!d) return;
+  if (viaRelay) { if (!relayAcked && relay) { relayAcked = true; relay.send({ k: 1 }); } if (phone.status === 'waiting' || phone.status === 'starting') phone.status = 'connected'; phone.via = conn && conn.open ? 'direct' : 'relay'; }
+  if (Array.isArray(d)) { phone.pitch = +d[0] || 0; phone.roll = +d[1] || 0; lastMsg = performance.now(); }
+  else if (d.h && relay) relay.send({ k: 1 });
+  else if (d.b) for (const cb of boostCbs) { try { cb(); } catch (_) {} }
+}
 let peer = null, conn = null, lastMsg = 0, sp = 0, sr = 0, lastT = 0;
 const boostCbs = [];
 export function onPhoneBoost(cb) { boostCbs.push(cb); }
 export function setPhoneSens(v) { phone.sens = clamp(+v || 1, 0.6, 1.6); save('padSens', phone.sens); }
-export function phoneBuzz(pattern) { if (conn && conn.open) try { conn.send({ v: pattern }); } catch (_) {} }
+export function phoneBuzz(pattern) { if (conn && conn.open) try { conn.send({ v: pattern }); } catch (_) {} else if (relay && relayAcked) relay.send({ v: pattern }); }
 
 export function hostPhone() {
   if (peer && !peer.destroyed) return;
@@ -37,26 +46,23 @@ export function hostPhone() {
   const u = new URL(location.href); u.search = ''; u.hash = ''; u.searchParams.set('pad', code);
   const sig = new URLSearchParams(location.search).get('sig'); if (sig) u.searchParams.set('sig', sig);
   phone.url = u.toString();
+  relayAcked = false; joinRelay(code, d => onData(d, true)).then(r => { if (phone.code !== code) { if (r) r.close(); return; } relay = r; if (r && phone.status !== 'connected') phone.status = 'waiting'; });
   peer = new Peer(padId(code), peerOptions());
   peer.on('open', () => { if (phone.status === 'starting') phone.status = 'waiting'; });
   peer.on('connection', c => {
     if (conn && conn.open) try { conn.close(); } catch (_) {}
     conn = c;
-    c.on('open', () => { phone.status = 'connected'; });
-    c.on('data', d => {
-      if (!d) return;
-      if (Array.isArray(d)) { phone.pitch = +d[0] || 0; phone.roll = +d[1] || 0; lastMsg = performance.now(); }
-      else if (d.b) for (const cb of boostCbs) { try { cb(); } catch (_) {} }
-    });
-    c.on('close', () => { if (conn === c) { conn = null; if (phone.status === 'connected') phone.status = 'waiting'; } });
+    c.on('open', () => { phone.status = 'connected'; phone.via = 'direct'; });
+    c.on('data', d => onData(d, false));
+    c.on('close', () => { if (conn === c) { conn = null; if (phone.status === 'connected' && !relayAcked) phone.status = 'waiting'; } });
   });
   peer.on('disconnected', () => { try { peer.reconnect(); } catch (_) {} });
   peer.on('error', e => {
-    if (phone.status === 'connected') return;           // an introduction-server hiccup does not affect a live link
+    if (phone.status === 'connected' || relay) return;   // a live link, or the relay, carries on without the introduction server
     phone.status = 'error'; phone.error = 'Could not set up the phone link (' + (e && e.type ? e.type : e) + '). Check the internet connection and try again.';
   });
 }
-export function stopPhone() { try { if (peer) peer.destroy(); } catch (_) {} peer = null; conn = null; phone.status = 'off'; phone.live = false; phone.L = phone.R = 0; }
+export function stopPhone() { try { if (peer) peer.destroy(); } catch (_) {} if (relay) relay.close(); relay = null; relayAcked = false; phone.code = ''; peer = null; conn = null; phone.status = 'off'; phone.live = false; phone.L = phone.R = 0; }
 
 /** Call once per frame. */
 export function updatePhone(now) {

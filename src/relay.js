@@ -1,0 +1,20 @@
+// A shared "room" both devices connect out to, so it works on any network. Slower than the direct link, so it is the fallback.
+import { RELAY_URL, RELAY_KEY } from './relay-config.js';
+export const relayReady = !!(RELAY_URL && RELAY_KEY);
+/** Join the room for a pairing code. Resolves to { send(data), close() } or null if the relay is off or unreachable. */
+export async function joinRelay(code, onData) {
+  if (!relayReady) return null;
+  try {
+    const { createClient } = await import('@supabase/supabase-js');
+    const sb = createClient(RELAY_URL, RELAY_KEY, { auth: { persistSession: false }, realtime: { params: { eventsPerSecond: 40 } } });
+    const ch = sb.channel('flyer-pad-' + String(code).toLowerCase(), { config: { broadcast: { self: false, ack: false } } });
+    ch.on('broadcast', { event: 'm' }, msg => { try { onData(msg.payload && msg.payload.d); } catch (_) {} });
+    return await new Promise(resolve => {
+      const t = setTimeout(() => resolve(null), 10000);
+      ch.subscribe(st => {
+        if (st === 'SUBSCRIBED') { clearTimeout(t); resolve({ send: d => { try { ch.send({ type: 'broadcast', event: 'm', payload: { d } }); } catch (_) {} }, close: () => { try { sb.removeChannel(ch); } catch (_) {} } }); }
+        else if (st === 'CHANNEL_ERROR' || st === 'TIMED_OUT') { clearTimeout(t); resolve(null); }
+      });
+    });
+  } catch (_) { return null; }
+}
