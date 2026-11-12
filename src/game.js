@@ -777,7 +777,7 @@ function readInput(dt){
   else{input.mL=ease(input.mL,0,5);input.mR=ease(input.mR,0,5);}
   if(settings.control==='phone'&&phone.status!=='off'){remote.active=phone.live;remote.L=phone.L;remote.R=phone.R;remote.tl=remote.tr=remote.active;if(remote.active&&keysDown.size===0&&!mouse&&touches.size===0)noteInput('remote');}
   else if(hand.enabled){remote.active=hand.tracking&&hand.calibrated;remote.L=hand.L;remote.R=hand.R;remote.tl=remote.tr=remote.active;if(remote.active&&settings.control==='camera'&&keysDown.size===0&&!mouse&&touches.size===0)noteInput('remote');}else remote.active=false;
-  const rRate=settings.control==='phone'?70:20;input.rL=ease(input.rL,remote.active?remote.L:0,rRate);input.rR=ease(input.rR,remote.active?remote.R:0,rRate);
+  const rRate=settings.control==='phone'?70:settings.control==='camera'?40:20;input.rL=ease(input.rL,remote.active?remote.L:0,rRate);input.rR=ease(input.rR,remote.active?remote.R:0,rRate);
   const s=settings.sens;return {L:clamp((input.tL+input.kL+input.mL+input.rL)*s,-1,1),R:clamp((input.tR+input.kR+input.mR+input.rR)*s,-1,1)};
 }
 function drawThumbs(){
@@ -837,7 +837,10 @@ function update(dt){
   const isTut=G.mode==='tut';G.time+=dt;
   if(G.rescueT>0){G.rescueT-=dt;if(G.rescueT<=0)finishRescue();return;}
   if(G.crashT>0){G.crashT-=dt;if(G.crashT<=0){placeAt(Math.max(30,G.s-50),46);G.speed=62;G.invuln=1.6;}return;}
-  const inp=readInput(dt);G.armL+=(inp.L-G.armL)*Math.min(1,dt*10);G.armR+=(inp.R-G.armR)*Math.min(1,dt*10);
+  // Tilt controls (phone, camera) are position controls: the glider should match your hand at once, so they skip the
+  // "heavy plane" easing that gives keys and mouse their weight. ~70 ms to settle instead of ~300 ms.
+  const direct=settings.control==='phone'||settings.control==='camera',kA=direct?30:10,kP=direct?14:3.2,kR=direct?14:4.2;G.direct=direct;
+  const inp=readInput(dt);G.armL+=(inp.L-G.armL)*(1-Math.exp(-dt*kA));G.armR+=(inp.R-G.armR)*(1-Math.exp(-dt*kA));
   let pitchIn=(inp.L+inp.R)/2;if(settings.invert)pitchIn=-pitchIn;const turnIn=(inp.L-inp.R)/2;G.pitchIn=pitchIn;G.turnIn=turnIn;
   // where is the current?
   streamPoint(G.s,_sp);const streamD=SD,streamOff=_sp.distanceTo(G.pos);G.inStream=!RACE&&streamOff<(TRACK==='coaster'?7.5:5.5);
@@ -847,14 +850,14 @@ function update(dt){
   if(hRel>200)tgt-=(hRel-200)*0.012;
   if(G.inStream&&Math.abs(pitchIn)<0.2)tgt+=clamp((_sp.y-G.pos.y)*0.03,-0.18,0.18);
   if(TRACK==='coaster'&&G.inStream){const y0=_sp.y;streamPoint(G.s+18,_sp2);const slope=Math.atan2(_sp2.y-y0,18);tgt+=(slope-tgt)*0.6*(1-Math.min(1,Math.abs(pitchIn)*1.5))+clamp((y0-G.pos.y)*0.04,-0.25,0.25);frame(G.s);}
-  tgt-=Math.abs(Math.sin(G.roll))*0.1;tgt=clamp(tgt,-1.1,0.85);const prevPitch=G.pitch;G.pitch+=(tgt-G.pitch)*Math.min(1,dt*3.2);
+  tgt-=Math.abs(Math.sin(G.roll))*0.1;tgt=clamp(tgt,-1.1,0.85);const prevPitch=G.pitch;G.pitch+=(tgt-G.pitch)*(direct?1-Math.exp(-dt*kP):Math.min(1,dt*kP));
   G.pitchRate+=((G.pitch-prevPitch)/Math.max(dt,1e-3)-G.pitchRate)*Math.min(1,dt*6);
   const tyaw=trackYaw();let yawRate=turnIn*1.6;
   const assist=Math.abs(turnIn)<0.08?0.35:0.08;yawRate+=angDiff(tyaw-(G.d-streamD)*0.006,G.yaw)*assist;
   if(G.inStream&&Math.abs(turnIn)<0.2)yawRate+=angDiff(tyaw-(G.d-streamD)*0.02,G.yaw)*0.5;
   if(Math.abs(G.d)>125)yawRate+=angDiff(tyaw-Math.sign(G.d)*0.6,G.yaw)*1.2;
   // Coordinated turn: you bank first, and the bank is what curves your path (tighter at low speed, wider at high speed).
-  {const v=Math.max(G.speed,25);const tgtRoll=clamp(Math.atan(yawRate*v/95),-1.15,1.15);G.roll+=(tgtRoll-G.roll)*Math.min(1,dt*4.2);
+  {const v=Math.max(G.speed,25);const tgtRoll=clamp(Math.atan(yawRate*v/95),-1.15,1.15);G.roll+=(tgtRoll-G.roll)*(direct?1-Math.exp(-dt*kR):Math.min(1,dt*kR));
    const yr=clamp(95*Math.tan(G.roll)/v,-2.6,2.6);G.yaw+=yr*dt;G.yawRate+=(yr-G.yawRate)*Math.min(1,dt*6);}
   let acc=-30*Math.sin(G.pitch)-0.00058*G.speed*G.speed+1.2-Math.abs(Math.sin(G.roll))*2;
   const clear=G.pos.y-groundAt(G.s,G.d);G.skim=clear>0&&clear<7.5;
@@ -999,7 +1002,7 @@ function updateCamera(dt,snap){
     const ff=clamp(CAM.fov+12+(G.speed-60)*0.15,CAM.fov+10,CAM.fov+34);camera.fov+=(ff-camera.fov)*Math.min(1,dt*3);camera.updateProjectionMatrix();return;}
   back.set(-Math.sin(G.yaw),Math.sin(G.pitch)*0.45,-Math.cos(G.yaw)).normalize();
   CUP.y=CAM.up;camPos.copy(G.pos).addScaledVector(back,-CAM.dist).add(CUP);const gy=groundAt(G.s,G.d)+3;if(camPos.y<gy)camPos.y=gy;
-  camera.position.lerp(camPos,snap?1:1-Math.exp(-dt*6.5));camLook.copy(G.pos).addScaledVector(dir,12);camera.lookAt(camLook);camera.rotateZ(G.roll*0.3);
+  camera.position.lerp(camPos,snap?1:1-Math.exp(-dt*(G.direct?11:6.5)));camLook.copy(G.pos).addScaledVector(dir,12);camera.lookAt(camLook);camera.rotateZ(G.roll*0.3);
   let shake=0;if(G.boostT>0)shake=0.08;if(G.crashT>0)shake=G.crashT*0.4;if(G.bumpT>0)shake=Math.max(shake,G.bumpT*0.25);shake=Math.max(shake,(G.gust||0)*0.06);
   if(shake){camera.position.x+=(Math.random()-0.5)*shake;camera.position.y+=(Math.random()-0.5)*shake;}
   const fov=clamp(CAM.fov+(G.speed-60)*0.13,CAM.fov-2,CAM.fov+20);camera.fov+=(fov-camera.fov)*Math.min(1,dt*3);camera.updateProjectionMatrix();
@@ -1242,6 +1245,8 @@ function phoneHud(now){
     if(phone.status==='connected'){const ms=Math.round(phone.ms||0),relay=phone.via==='relay';
       $('padLink').textContent=(relay?'Linked through the relay (slower). Put both devices on the same Wi‑Fi for the direct link.':'Linked directly.')+(ms?' Delay about '+ms+' ms'+(ms>60?' — that is high; the same Wi‑Fi, closer to the router, helps.':'.'):'');}
   }
+  {const slow=settings.control==='phone'&&(G.state==='play'||G.state==='count')&&phone.status==='connected'&&phone.via==='relay';$('linkChip').hidden=!slow;
+   if(slow)$('linkChip').textContent='PHONE ON SLOW LINK'+(phone.ms?' · '+Math.round(phone.ms)+' MS':'')+' · SAME WI‑FI FIXES IT';}
   if(settings.control==='phone'&&G.state==='play'){
     if(phone.ms>110&&!padSlowLogged){padSlowLogged=true;logIssue('Phone glider','The phone link is slow (about '+Math.round(phone.ms)+' ms, '+(phone.via==='relay'?'through the relay':'direct')+'). Same Wi‑Fi for both devices makes it quicker.');}
     if(phone.live)padLostSince=0;else{if(!padLostSince)padLostSince=now;if(now-padLostSince>2500){pause();$('pauseNote').textContent='Paused because the phone stopped sending its tilt. Wake the phone and check it still says Connected, then resume.';}}

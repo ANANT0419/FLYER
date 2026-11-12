@@ -37,12 +37,12 @@ export function startPad(code) {
     sendTilt(false);   // send the moment the sensor reports, rather than waiting for the next beat
   }
   // the direct link gets every sensor reading (up to ~100 a second). The relay shares a message limit with everyone
-  // playing (including race rooms), so it gets at most 15 a second, only when the tilt has changed, plus a slow heartbeat.
+  // playing (including race rooms), so it gets up to 30 a second but only when the tilt has changed, plus a slow heartbeat.
   let lastSent = 0, sentP = 1e9, sentR = 1e9;
   function sendTilt(beatTick) {
     if (!gotSensor) return; const t = performance.now(), direct = conn && conn.open;
     if (direct) { if (t - lastSent < 8 || (beatTick && t - lastSent < 40)) return; }
-    else { const moved = Math.abs(curP - sentP) > 0.4 || Math.abs(curR - sentR) > 0.4; if (t - lastSent < 66 || (!moved && t - lastSent < 300)) return; }
+    else { const moved = Math.abs(curP - sentP) > 0.4 || Math.abs(curR - sentR) > 0.4; if (t - lastSent < 33 || (!moved && t - lastSent < 300)) return; }
     const m = [+curP.toFixed(2), +curR.toFixed(2)]; lastSent = t; sentP = curP; sentR = curR;
     if (direct) { try { conn.send(m); } catch (_) {} } else if (relayUp) relay.send(m);
   }

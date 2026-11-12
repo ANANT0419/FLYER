@@ -2,7 +2,8 @@
 //  - presence lists who is in the room; whoever has been in it longest is the host and starts races
 //  - broadcast carries the start signal, each racer's position about 10 times a second, and finish times
 // Racers pass through each other, so a little network delay never causes an unfair bump.
-// Positions go out 4 times a second (the service has a project-wide message limit shared with the phone relay).
+// Positions go out 5 times a second (the service has a project-wide message limit shared with the phone relay); each
+// racer is drawn where they are predicted to be right now, from their last position and velocity, then smoothed.
 import { rtClient, rtReady, rtSend } from './rt.js';
 
 export const raceNetReady = rtReady;
@@ -102,27 +103,35 @@ export function startRace() {
   send('go', payload); setTimeout(() => send('go', payload), 400); emit('change'); return payload;   // sent twice in case one is lost
 }
 let lastSend = 0;
-/** Share where I am. Call every frame; it sends 4 times a second. */
+/** Share where I am. Call every frame; it sends 5 times a second. */
 export function sendState(now, s) {
-  if (room.status !== 'in' || now - lastSend < 245) return; lastSend = now;
-  send('st', { id: room.me.id, rid: room.rid, p: s.p.map(v => Math.round(v * 10) / 10), a: s.a.map(v => Math.round(v * 100) / 100), s: Math.round(s.s), arm: s.arm, done: !!s.done });
+  if (room.status !== 'in' || now - lastSend < 195) return; lastSend = now;
+  send('st', { id: room.me.id, rid: room.rid, p: s.p.map(v => Math.round(v * 10) / 10), a: s.a.map(v => Math.round(v * 100) / 100), s: Math.round(s.s), arm: s.arm, done: !!s.done, t: Math.round(now) });
 }
 export function sendFinish(time, pen) {
   addResult(room.me.id, room.me.name, time, pen);
   const f = { id: room.me.id, rid: room.rid, name: room.me.name, time, pen }; send('fin', f); setTimeout(() => send('fin', f), 1500);
 }
-/** Where a racer was ~320 ms ago (a little over one message gap), smoothly between the messages received. Returns null if they have gone quiet. */
+/** Where a racer is right now: their last reported position carried forward along their velocity (measured with the
+ *  sender's own clock, so network jitter does not bend it), allowing for the trip across the network, then smoothed so
+ *  corrections glide instead of jump. Returns null if they have gone quiet. */
+const LATENCY = 80;   // ms, a typical one-way trip through the service
 export function ghostPose(p, now) {
   if (!p.buf.length || now - p.seen > 3000) return null;
-  const t = now - 320, b = p.buf;
-  if (t <= b[0][0]) return b[0][1];
-  for (let i = b.length - 1; i > 0; i--) {
-    if (b[i - 1][0] <= t) {
-      const [t0, s0] = b[i - 1], [t1, s1] = b[i]; if (t >= t1) return s1;
-      const k = (t - t0) / Math.max(1, t1 - t0), lerp = (a, c) => a + (c - a) * k;
-      const ang = (a, c) => { let d = c - a; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; return a + d * k; };
-      return { p: [lerp(s0.p[0], s1.p[0]), lerp(s0.p[1], s1.p[1]), lerp(s0.p[2], s1.p[2])], a: [ang(s0.a[0], s1.a[0]), ang(s0.a[1], s1.a[1]), ang(s0.a[2], s1.a[2])], s: lerp(s0.s, s1.s), done: s1.done };
-    }
+  const [r1, s1] = p.buf[p.buf.length - 1];
+  let v = [0, 0, 0], w = [0, 0, 0];
+  if (p.buf.length > 1) {
+    const s0 = p.buf[p.buf.length - 2][1], dt = (s1.t && s0.t ? s1.t - s0.t : r1 - p.buf[p.buf.length - 2][0]) || 1;
+    if (dt > 20 && dt < 1000) { for (let k = 0; k < 3; k++) { v[k] = (s1.p[k] - s0.p[k]) / dt; let d = s1.a[k] - s0.a[k]; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; w[k] = d / dt; } }
   }
-  return b[b.length - 1][1];
+  const ahead = Math.min(450, now - r1 + LATENCY);
+  const tp = [0, 1, 2].map(k => s1.p[k] + v[k] * ahead), ta = [0, 1, 2].map(k => s1.a[k] + w[k] * Math.min(ahead, 250));
+  const dt = p.lastPose ? Math.min(0.1, (now - p.lastPose) / 1000) : 1; p.lastPose = now;
+  if (!p.disp || dt >= 1 || Math.hypot(tp[0] - p.disp.p[0], tp[1] - p.disp.p[1], tp[2] - p.disp.p[2]) > 40) p.disp = { p: tp.slice(), a: ta.slice() };
+  else {
+    const g = 1 - Math.exp(-dt * 10);
+    for (let k = 0; k < 3; k++) { p.disp.p[k] += v[k] * dt * 1000; p.disp.p[k] += (tp[k] - p.disp.p[k]) * g;   // keep moving, then ease onto the prediction
+      let d = ta[k] - p.disp.a[k]; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; p.disp.a[k] += d * g; }
+  }
+  return { p: p.disp.p, a: p.disp.a, s: s1.s, done: s1.done };
 }
