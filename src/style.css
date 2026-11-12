@@ -222,3 +222,29 @@ h2{margin:0;font-size:clamp(26px,5vw,36px);font-weight:800;letter-spacing:-.03em
 #camSetup{padding-bottom:calc(env(safe-area-inset-bottom,0px) + 58px)}
 .camlist li{padding-left:36px}
 .camsens{display:flex;align-items:center;gap:8px}.camsens input{flex:1;accent-color:var(--gem)}
+
+/* phone glider: pairing screen on the big screen */
+#phoneSetup{z-index:27;background:radial-gradient(ellipse at 50% 60%,rgba(25,29,46,.55),rgba(25,29,46,.9));padding-bottom:calc(env(safe-area-inset-bottom,0px) + 58px)}
+.qrbox{background:#fff6ea;border-radius:16px;padding:12px;display:grid;place-items:center;aspect-ratio:1}
+.qrbox canvas{width:100%!important;height:auto!important;display:block;image-rendering:pixelated}
+.padurl{font-size:12px;color:var(--muted);word-break:break-all;user-select:text;-webkit-user-select:text}
+.minidial{position:relative;height:84px;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:rgba(255,246,234,.04)}
+.minidial::before{content:"";position:absolute;left:0;right:0;top:50%;height:1px;background:var(--line)}
+.minidial i{position:absolute;left:50%;top:50%;width:110px;height:5px;margin:-2.5px 0 0 -55px;border-radius:5px;background:var(--saffron);box-shadow:0 0 14px rgba(255,176,74,.6)}
+.ctlcard.cam .badge.best{background:var(--saffron);color:#2a1a0c}
+.touch .ctlcard[data-ctl="phone"]{display:none}
+/* phone glider: the phone itself */
+.padmode,.padmode body{height:100%;background:#12152a}
+.pad{position:fixed;inset:0;display:flex;flex-direction:column;gap:12px;padding:calc(env(safe-area-inset-top,0px) + 14px) 16px calc(env(safe-area-inset-bottom,0px) + 14px)}
+.padtop{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.padstat{font-size:13px;font-weight:700;color:var(--saffron);text-align:right}
+.padstat.ok{color:var(--good)}
+.padstage{flex:1;border:1px solid var(--line);border-radius:22px;background:radial-gradient(ellipse at 50% 40%,rgba(134,240,255,.10),rgba(255,246,234,.03));display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:18px;min-height:0;position:relative;overflow:hidden}
+.paddial{position:relative;width:min(62vw,300px);aspect-ratio:1;border-radius:50%;border:2px solid var(--line);overflow:hidden;background:rgba(13,16,32,.6)}
+.padhorizon{position:absolute;left:0;right:0;top:50%;height:1px;background:rgba(255,246,234,.25)}
+.padwing{position:absolute;inset:0;display:grid;place-items:center}
+.padwing i{width:72%;height:8px;border-radius:8px;background:var(--saffron);box-shadow:0 0 22px rgba(255,176,74,.7)}
+.padhint{text-align:center;color:var(--muted);font-size:15px;line-height:1.4;max-width:30ch}
+.padboost{font-size:22px;font-weight:800;letter-spacing:.12em;color:var(--gem);padding:14px 26px;border:2px solid rgba(134,240,255,.5);border-radius:999px;transition:transform .12s,background .12s}
+.padboost.hit{transform:scale(1.12);background:rgba(134,240,255,.25)}
+.padbar{display:flex;align-items:center;justify-content:space-between;gap:10px}

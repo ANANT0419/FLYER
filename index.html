@@ -76,6 +76,7 @@
       <button class="ctlcard" data-ctl="mouse"><span class="tn">Mouse</span><span class="td">Hold and drag to steer.</span></button>
       <button class="ctlcard" data-ctl="arms"><span class="tn">Two arms</span><span class="td">W/S and ↑/↓ move one arm each. Most control.</span></button>
       <button class="ctlcard" data-ctl="touch"><span class="tn">Touch</span><span class="td">Thumbs on the screen.</span></button>
+      <button class="ctlcard cam" data-ctl="phone"><span class="tn">Phone glider <span class="badge best">Best feel</span></span><span class="td">Hold your phone flat and tilt it. The steadiest way to fly.</span></button>
       <button class="ctlcard cam" data-ctl="camera"><span class="tn">Camera <span class="badge new">New</span></span><span class="td">Your hand is the glider. No keys at all.</span></button>
     </div>
     <div class="small" id="ctlHelp"></div>
@@ -177,8 +178,34 @@
     </div>
   </div>
 </div>
+<div class="overlay" id="phoneSetup" hidden>
+  <div class="card camcard">
+    <div class="eyebrow">Phone glider</div>
+    <h2>Your phone is the glider</h2>
+    <div class="camgrid">
+      <div class="qrbox"><canvas id="padQR" aria-label="QR code to open the controller on your phone"></canvas></div>
+      <div class="camside">
+        <p class="lede" id="padMsg"></p>
+        <ul class="camlist">
+          <li>Nose up <span>climb</span></li>
+          <li>Nose down <span>dive</span></li>
+          <li>Roll left or right <span>turn</span></li>
+          <li>Tap the phone screen <span>boost</span></li>
+        </ul>
+        <div class="minidial" aria-hidden="true"><i id="padDial"></i></div>
+        <label class="small camsens">Tilt sensitivity <input type="range" id="padSens" min="0.6" max="1.6" step="0.05" value="1"></label>
+        <p class="small padurl" id="padUrl"></p>
+        <p class="small">Both devices need internet to find each other; after that the tilt goes straight from phone to screen.</p>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="primary-btn" id="padDone" disabled>Use phone glider</button>
+      <button class="secondary" id="padCancel">Cancel</button>
+    </div>
+  </div>
+</div>
 <div class="camhud" id="camHud" hidden><canvas id="camHudView" class="camview"></canvas></div>
 
-<script type="module" src="/src/game.js"></script>
+<script type="module" src="/src/main.js"></script>
 </body>
 </html>

@@ -2,6 +2,8 @@
 import * as THREE from 'three';
 import {hand,enableHand,disableHand,updateHand,onFist,attachCanvas,requestCalibration,beginRangeLearning,commitRangeLearning,resetHandRange,setHandSens} from './hand.js';
 import {createPost} from './post.js';
+import {phone,hostPhone,stopPhone,updatePhone,onPhoneBoost,phoneBuzz,setPhoneSens} from './link.js';
+import QRCode from 'qrcode';
 (function(){
 "use strict";
 /* ================= issue log ================= */
@@ -40,7 +42,7 @@ const bestKey=()=>TRACK==='coaster'?'best.coaster':'best';let best=store.get('be
 const isTouch=!!(window.matchMedia&&matchMedia('(pointer:coarse)').matches);let lastInput=isTouch?'touch':'keys';
 const settings={view:store.get('view','3p')==='fp'?'fp':'3p',invert:store.get('invert',false),sens:store.get('sens',1),mode:store.get('mode','two'),control:store.get('control',isTouch?'touch':'simple')};
 if(isTouch&&settings.control!=='camera')settings.control='touch';if(!isTouch&&settings.control==='touch')settings.control='simple';
-const ctlMode=()=>lastInput==='touch'?settings.mode:lastInput==='remote'?'hand':lastInput==='keys'?(settings.control==='arms'?'keys':'simple'):lastInput;
+const ctlMode=()=>lastInput==='touch'?settings.mode:lastInput==='remote'?(settings.control==='phone'?'phone':'hand'):lastInput==='keys'?(settings.control==='arms'?'keys':'simple'):lastInput;
 
 /* ================= renderer ================= */
 const canvas=$('c');let renderer;
@@ -659,7 +661,7 @@ function initAudio(){if(actx)return;try{actx=new(window.AudioContext||window.web
 function tone(freq,dur,type,vol,slide){if(!actx||muted)return;try{const o=actx.createOscillator(),g=actx.createGain(),t=actx.currentTime;o.type=type||'sine';o.frequency.setValueAtTime(freq,t);
   if(slide)o.frequency.exponentialRampToValueAtTime(freq*slide,t+dur);g.gain.setValueAtTime(0.0001,t);g.gain.exponentialRampToValueAtTime(vol||0.08,t+0.012);g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
   o.connect(g).connect(actx.destination);o.start(t);o.stop(t+dur+0.02);}catch(e){}}
-function buzz(ms){if(navigator.vibrate)try{navigator.vibrate(ms);}catch(e){}}
+function buzz(ms){if(navigator.vibrate)try{navigator.vibrate(ms);}catch(e){}if(phone.status==='connected')phoneBuzz(ms);}
 function setMuteUI(){$('muteBtn').textContent=muted?'×':'♪';$('muteBtn').setAttribute('aria-label',muted?'Unmute sound':'Mute sound');}
 setMuteUI();$('muteBtn').onclick=()=>{muted=!muted;store.set('muted',muted);setMuteUI();};
 
@@ -705,7 +707,8 @@ function readInput(dt){
   input.kL=ease(input.kL,clamp(kl,-1,1),5);input.kR=ease(input.kR,clamp(kr,-1,1),5);
   if(mouse){const p=clamp((mouse.y-mouse.y0)/(window.innerHeight*0.2),-1,1),t=clamp(-(mouse.x-mouse.x0)/(window.innerWidth*0.15),-1,1);input.mL=clamp(p+t,-1,1);input.mR=clamp(p-t,-1,1);}
   else{input.mL=ease(input.mL,0,5);input.mR=ease(input.mR,0,5);}
-  if(hand.enabled){remote.active=hand.tracking&&hand.calibrated;remote.L=hand.L;remote.R=hand.R;remote.tl=remote.tr=remote.active;if(remote.active&&settings.control==='camera'&&keysDown.size===0&&!mouse&&touches.size===0)noteInput('remote');}else remote.active=false;
+  if(settings.control==='phone'&&phone.status!=='off'){remote.active=phone.live;remote.L=phone.L;remote.R=phone.R;remote.tl=remote.tr=remote.active;if(remote.active&&keysDown.size===0&&!mouse&&touches.size===0)noteInput('remote');}
+  else if(hand.enabled){remote.active=hand.tracking&&hand.calibrated;remote.L=hand.L;remote.R=hand.R;remote.tl=remote.tr=remote.active;if(remote.active&&settings.control==='camera'&&keysDown.size===0&&!mouse&&touches.size===0)noteInput('remote');}else remote.active=false;
   input.rL=ease(input.rL,remote.active?remote.L:0,20);input.rR=ease(input.rR,remote.active?remote.R:0,20);
   const s=settings.sens;return {L:clamp((input.tL+input.kL+input.mL+input.rL)*s,-1,1),R:clamp((input.tR+input.kR+input.mR+input.rR)*s,-1,1)};
 }
@@ -830,13 +833,13 @@ function hold(cond,need,dt){if(cond)tut.hold+=dt;else tut.hold=Math.max(0,tut.ho
 function spawnTutRings(){tutRings.forEach((r,k)=>setRing(r,Math.min(G.s+150+k*120,LEN-300)));}
 function spawnTutGems(from){let k=0;for(const g of tutGems){if(g.got===false&&g.s>G.s)continue;const s=Math.min(from+k*13,LEN-300);streamAt(s);
   const d=SD+6*Math.sin(k*0.7),h=Math.max(SH+3*Math.cos(k*0.5),relH(s,d)+5);g.s=s;worldAt(s,d,h,g.base);g.cur.copy(g.base);g.got=false;g.pull=0;k++;}}
-const DEV={keys:'Keyboard',simple:'Keyboard',mouse:'Mouse',two:'Phone',one:'Phone',hand:'Camera'};
+const DEV={keys:'Keyboard',simple:'Keyboard',mouse:'Mouse',two:'Phone',one:'Phone',hand:'Camera',phone:'Phone glider'};
 const STEPS=[
   {title:'Get a grip',zone:['c','c'],ghost:['c','c'],
     text:{two:'Rest one thumb on each half of the screen and keep them there. Each thumb is one of your arms.',one:'Rest your thumb anywhere on the screen. You steer by dragging it.',
       keys:'Your left arm is W / S and your right arm is ↑ / ↓. Rest your fingers on them.',mouse:'Press and hold the mouse button anywhere on the view. You steer by dragging.'},
     alt:{two:'a thumb on each half',one:'one thumb anywhere',keys:'fingers on W/S and ↑/↓',mouse:'press and hold, then drag'},
-    check:dt=>{const m=ctlMode();if(m==='hand')return hold(remote.active,0.7,dt);if(m==='two'){const s=touchSides();return hold((s.has('L')&&s.has('R'))||(remote.active&&remote.tl&&remote.tr),0.7,dt);}if(m==='one')return hold(touchSides().has('O')||(remote.active&&(remote.tl||remote.tr)),0.7,dt);if(m==='mouse')return hold(!!mouse,0.7,dt);return hold(true,2.4,dt);}},
+    check:dt=>{const m=ctlMode();if(m==='hand'||m==='phone')return hold(remote.active,0.7,dt);if(m==='two'){const s=touchSides();return hold((s.has('L')&&s.has('R'))||(remote.active&&remote.tl&&remote.tr),0.7,dt);}if(m==='one')return hold(touchSides().has('O')||(remote.active&&(remote.tl||remote.tr)),0.7,dt);if(m==='mouse')return hold(!!mouse,0.7,dt);return hold(true,2.4,dt);}},
   {title:'Dive',zone:['u','u'],ghost:['u','u'],
     text:{two:'Slide both thumbs up. Your arms tuck back and you pick up speed.',one:'Drag your thumb up. You tip forward and speed up.',keys:'Hold W and ↑ together. Your arms tuck back and you speed up.',mouse:'Drag the mouse up. You tip forward and speed up.'},
     alt:{two:'both thumbs up',one:'drag thumb up',keys:'W + ↑',mouse:'drag up'},check:dt=>hold(G.pitchIn<-0.4,1.0,dt)},
@@ -875,13 +878,18 @@ const STEPS=[
  null,null,null,
  ['Press Space to fire your pack. Gold rings refill the boost meter.','Space','Close your hand into a fist, then open it again, to fire your pack. Gold rings refill the boost meter.','close a fist']
 ].forEach((x,i)=>{if(!x)return;const st=STEPS[i];st.text.simple=x[0];st.alt.simple=x[1];st.text.hand=x[2];st.alt.hand=x[3];});
+[['Hold your phone flat on your palm, screen up, top edge pointing at this screen. The phone is the glider.','phone held flat'],
+ ['Tip the nose of the phone down. You tip forward and pick up speed.','nose down'],['Lift the nose of the phone. You rise, trading speed for height.','nose up'],
+ ['Bring the phone back to flat. The suit levels out by itself.','phone flat'],['Roll the phone to the left, like a plane banking. You lean and curve left.','roll left'],
+ ['Roll the phone to the right. You lean and curve right.','roll right'],null,null,null,['Tap the phone screen to fire your pack. Gold rings refill the boost meter.','tap the phone']
+].forEach((x,i)=>{if(!x)return;STEPS[i].text.phone=x[0];STEPS[i].alt.phone=x[1];});
 function tutText(st){const m=ctlMode();return st.text.all||st.text[m]||st.text.two;}
 function tutAlt(st){if(!st.alt)return '';const m=ctlMode();const isPhone=m==='two'||m==='one';
-  const others=(isTouch?[settings.mode]:[settings.control==='arms'?'keys':'simple','mouse']).concat(hand.enabled?['hand']:[]).filter(k=>k!==m&&!(isPhone&&(k==='two'||k==='one')));if(!others.length)return '';
+  const others=(isTouch?[settings.mode]:[settings.control==='arms'?'keys':'simple','mouse']).concat(hand.enabled?['hand']:[]).concat(phone.status==='connected'?['phone']:[]).filter(k=>k!==m&&!(isPhone&&(k==='two'||k==='one')));if(!others.length)return '';
   return 'Also: '+others.map(k=>DEV[k]+' · '+st.alt[k]).join('   |   ');}
 function setPad(pad,zone,ghost){const z=pad.querySelector('.zone'),g=pad.querySelector('.ghost');
   const flip=c=>settings.invert&&(c==='u'||c==='d')?(c==='u'?'d':'u'):c;z.className='zone '+flip(zone);g.className='ghost '+flip(ghost);}
-function padKeys(){const m=ctlMode(),arm=m==='mouse'||m==='simple'||m==='hand';$('padLk').textContent=m==='keys'?'W / S':arm?'LEFT ARM':'LEFT';$('padRk').textContent=m==='keys'?'↑ / ↓':arm?'RIGHT ARM':'RIGHT';}
+function padKeys(){const m=ctlMode(),arm=m==='mouse'||m==='simple'||m==='hand'||m==='phone';$('padLk').textContent=m==='keys'?'W / S':arm?'LEFT ARM':'LEFT';$('padRk').textContent=m==='keys'?'↑ / ↓':arm?'RIGHT ARM':'RIGHT';}
 function tutRefresh(){const st=STEPS[tut.i];$('cBody').textContent=tutText(st);const a=tutAlt(st);$('cAlt').textContent=a;$('cAlt').hidden=!a;padKeys();}
 function tutEnter(i){tut.i=i;tut.hold=0;tut.acc=0;tut.delay=0;const st=STEPS[i];if(st.enter)st.enter();
   $('cStep').textContent='Lesson '+(i+1)+' of '+STEPS.length;$('cTitle').textContent=st.title;$('cFill').style.width='0%';
@@ -984,7 +992,7 @@ function startTutorial(){if(needCam())return;initAudio();if(actx&&actx.state==='
   showOnly(null);$('hud').hidden=false;$('hud').classList.add('tut');$('coach').hidden=false;tutEnter(0);canvas.focus();goFull();}
 function toMenu(){G.state='menu';G.mode='main';$('hud').hidden=true;$('coach').hidden=true;showOnly('startScreen');updateTutBadge();}
 function pause(){if(G.state!=='play')return;G.state='paused';showOnly('pauseScreen');}
-function resume(){if(G.state!=='paused')return;$('pauseNote').textContent='';lostSince=0;G.state='play';showOnly(null);canvas.focus();}
+function resume(){if(G.state!=='paused')return;$('pauseNote').textContent='';lostSince=0;padLostSince=0;G.state='play';showOnly(null);canvas.focus();}
 function finish(){G.state='end';G.score=Math.floor(G.score);best=store.get(bestKey(),0);const isBest=G.score>best;if(isBest){best=G.score;store.set(bestKey(),best);}
   $('eScore').textContent=G.score.toLocaleString();$('eGems').textContent=G.gems+'/'+gems.length;$('eRings').textContent=G.rings+'/'+rings.length;
   $('eTime').textContent=fmtTime(G.time);$('eCrash').textContent=G.crashes;$('eBest').textContent=best.toLocaleString();$('newBest').hidden=!isBest;
@@ -993,7 +1001,7 @@ function finish(){G.state='end';G.score=Math.floor(G.score);best=store.get(bestK
 $('startBtn').onclick=start;$('tutBtn').onclick=startTutorial;$('againBtn').onclick=start;$('endMenuBtn').onclick=toMenu;
 $('pauseBtn').onclick=pause;$('resumeBtn').onclick=resume;$('restartBtn').onclick=()=>{G.mode==='tut'?startTutorial():start();};$('menuBtn').onclick=toMenu;
 $('tdGo').onclick=start;$('tdAgain').onclick=startTutorial;
-window.addEventListener('keydown',e=>{if(e.key==='Enter'){if(!$('camSetup').hidden)return;if(G.state==='menu'||G.state==='end'||G.state==='tutdone')start();}});
+window.addEventListener('keydown',e=>{if(e.key==='Enter'){if(!$('camSetup').hidden||!$('phoneSetup').hidden)return;if(G.state==='menu'||G.state==='end'||G.state==='tutdone')start();}});
 try{hot&&hot.snapshot&&hot.snapshot(()=>({best}));}catch(e){}
 
 /* ================= control picker & camera control ================= */
@@ -1002,14 +1010,17 @@ onFist(()=>{if(settings.control==='camera'||!$('camSetup').hidden){ck.Fist=true;
 const CTL_HELP={simple:'↑ climb · ↓ dive · ← → turn · Space boost · V view · P pause. W A S D work too.',
   arms:'W / S move your left arm, ↑ / ↓ your right arm: both up to dive, both down to climb, one of each to turn. A / D quick turn · Space boost.',
   mouse:'Press and hold on the view, then drag: up to dive, down to climb, sideways to turn. Double-click to boost.',
+  phone:'Hold your phone flat, top edge toward this screen: nose up to climb, down to dive, roll to turn, tap its screen to boost.',
   camera:'Hold a flat hand to the camera: fingertips up to climb, down to dive, tilt to turn, close a fist to boost. Either hand, swap any time.',
   touch:'A thumb on each half: both up to dive, both down to climb, one of each to turn. Double-tap to boost.'};
 const ck={Up:false,Down:false,Left:false,Right:false,Fist:false};let lostSince=0,handWarned=false,camPrev='simple';
 function syncControlUI(){for(const b of document.querySelectorAll('.ctlcard'))b.setAttribute('aria-pressed',String(b.dataset.ctl===settings.control));
   $('ctlHelp').textContent=CTL_HELP[settings.control]||'';$('modeRow').hidden=settings.control!=='touch';}
-function setControl(c){if(c==='camera'){camPrev=settings.control==='camera'?(isTouch?'touch':'simple'):settings.control;openCamSetup();return;}
+function setControl(c){if(c==='phone'){camPrev=settings.control==='phone'||settings.control==='camera'?'simple':settings.control;openPhoneSetup();return;}if(phone.status!=='off')stopPhone();
+  if(c==='camera'){camPrev=settings.control==='camera'?(isTouch?'touch':'simple'):settings.control;openCamSetup();return;}
   if(hand.enabled||hand.status!=='off')disableHand();settings.control=c;store.set('control',c);lastInput=c==='touch'?'touch':c==='mouse'?'mouse':'keys';syncControlUI();}
-function needCam(){if(settings.control==='camera'&&hand.status!=='ready'){camPrev=isTouch?'touch':'simple';openCamSetup();return true;}return false;}
+function needCam(){if(settings.control==='phone'&&phone.status!=='connected'){camPrev='simple';openPhoneSetup();return true;}
+  if(settings.control==='camera'&&hand.status!=='ready'){camPrev=isTouch?'touch':'simple';openCamSetup();return true;}return false;}
 function openCamSetup(){for(const k in ck)ck[k]=false;$('camSetup').hidden=false;$('handSens').value=hand.sens;beginRangeLearning();
   if(hand.status==='ready'){requestCalibration();return;}
   enableHand().then(ok=>{if(!ok)logIssue('Camera',hand.error);});}
@@ -1021,6 +1032,28 @@ for(const b of document.querySelectorAll('.ctlcard'))b.onclick=()=>{if(G.state==
 $('camDone').onclick=()=>closeCamSetup(true);$('camCancel').onclick=()=>closeCamSetup(false);$('camRecalBtn').onclick=()=>{resetHandRange();beginRangeLearning();for(const k in ck)ck[k]=false;requestCalibration();};
 $('handSens').addEventListener('input',e=>setHandSens(e.target.value));
 window.addEventListener('keydown',e=>{if((e.key==='c'||e.key==='C')&&hand.enabled&&!e.repeat){requestCalibration();toast('Hold your hand flat','good');}});
+/* phone glider pairing */
+let qrFor='';
+function openPhoneSetup(){if(hand.enabled||hand.status!=='off')disableHand();$('phoneSetup').hidden=false;$('padSens').value=phone.sens;if(phone.status==='off'||phone.status==='error'){stopPhone();hostPhone();}}
+function closePhoneSetup(use){$('phoneSetup').hidden=true;
+  if(use&&phone.status==='connected'){settings.control='phone';store.set('control','phone');lastInput='remote';}
+  else{stopPhone();settings.control=camPrev;store.set('control',camPrev);}
+  syncControlUI();}
+$('padDone').onclick=()=>closePhoneSetup(true);$('padCancel').onclick=()=>closePhoneSetup(false);$('padSens').addEventListener('input',e=>setPhoneSens(e.target.value));
+onPhoneBoost(()=>{if(G.state==='play')tryBoost();});
+let padLostSince=0;
+function phoneHud(now){
+  if(!$('phoneSetup').hidden){
+    if(phone.url&&qrFor!==phone.url){qrFor=phone.url;$('padUrl').textContent=phone.url;QRCode.toCanvas($('padQR'),phone.url,{width:360,margin:1,color:{dark:'#191d2e',light:'#fff6ea'}},err=>{if(err)logIssue('Phone glider','Could not draw the QR code: '+err.message);});}
+    $('padMsg').textContent=phone.status==='error'?phone.error:phone.status==='starting'?'Setting up the link…':phone.status==='waiting'?'Scan this code with your phone camera, then tap “Tap to connect” on the phone.'
+      :phone.live?'Connected. Tilt the phone and watch the bar follow. Hold it flat and press “Set level” on the phone if it sits off-centre.':'Connected. Waiting for the phone to send its tilt…';
+    $('padDone').disabled=phone.status!=='connected';
+    $('padDial').style.transform='translateY('+(-(phone.sp||0)*1.1).toFixed(1)+'px) rotate('+(phone.sr||0).toFixed(1)+'deg)';
+  }
+  if(settings.control==='phone'&&G.state==='play'){
+    if(phone.live)padLostSince=0;else{if(!padLostSince)padLostSince=now;if(now-padLostSince>2500){pause();$('pauseNote').textContent='Paused because the phone stopped sending its tilt. Wake the phone and check it still says Connected, then resume.';}}
+  }
+}
 function handHud(now){
   const on=hand.enabled&&hand.status==='ready',setup=!$('camSetup').hidden;
   $('camHud').hidden=!(on&&!setup&&(G.state==='play'||G.state==='paused'));
@@ -1046,7 +1079,7 @@ syncControlUI();
 let last=performance.now(),fpsF=0,fpsT=0,lowCount=0,lowered=false;
 function loop(now){requestAnimationFrame(loop);let dt=(now-last)/1000;last=now;if(dt>0.05)dt=0.05;if(dt<=0)dt=0.016;timeU.value=now/1000;
   try{if(G.state==='play'){update(dt);updateHUD();if(G.mode==='tut')tutPads();}else $('oob').hidden=true;
-    updateCamera(dt,false);updateVisuals(dt,now/1000);drawThumbs();updateHand(now);handHud(now);post.render(now/1000,G.state==='play'?clamp((G.speed-70)/100,0,1):0);}
+    updateCamera(dt,false);updateVisuals(dt,now/1000);drawThumbs();updateHand(now);handHud(now);updatePhone(now);phoneHud(now);post.render(now/1000,G.state==='play'?clamp((G.speed-70)/100,0,1):0);}
   catch(e){logIssue('Frame',e.message+(e.stack?' | '+String(e.stack).split('\n')[1]:''));}
   fpsF++;fpsT+=dt;if(fpsT>=2){const fps=fpsF/fpsT;fpsF=0;fpsT=0;
     if(G.state==='play'&&fps<26){lowCount++;if(lowCount>=2&&post.level>1){post.setLevel(1);lowCount=0;logIssue('Performance','Low frame rate ('+Math.round(fps)+' fps). Switched off the brushwork filter to keep play smooth.');}else if(lowCount>=2&&!lowered){lowered=true;pixelRatio=1;renderer.setPixelRatio(1);resize();logIssue('Performance','Low frame rate ('+Math.round(fps)+' fps). Lowered render resolution to keep play smooth.');}}else lowCount=0;}}
