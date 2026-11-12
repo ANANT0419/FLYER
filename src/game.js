@@ -1,6 +1,6 @@
 // Flyer: a wingsuit gliding game. Grown from Glidepath v6 (see legacy/).
 import * as THREE from 'three';
-import {hand,enableHand,disableHand,updateHand,onFist,attachCanvas,requestCalibration,beginRangeLearning,commitRangeLearning,resetHandRange,setHandSens} from './hand.js';
+import {hand,enableHand,disableHand,updateHand,onFist,attachCanvas,requestCalibration,setCamMode,beginRangeLearning,commitRangeLearning,resetHandRange,setHandSens} from './hand.js';
 import {createPost} from './post.js';
 import {phone,hostPhone,stopPhone,updatePhone,onPhoneBoost,phoneBuzz,setPhoneSens} from './link.js';
 import QRCode from 'qrcode';
@@ -1011,7 +1011,7 @@ const CTL_HELP={simple:'↑ climb · ↓ dive · ← → turn · Space boost · 
   arms:'W / S move your left arm, ↑ / ↓ your right arm: both up to dive, both down to climb, one of each to turn. A / D quick turn · Space boost.',
   mouse:'Press and hold on the view, then drag: up to dive, down to climb, sideways to turn. Double-click to boost.',
   phone:'Hold your phone flat, top edge toward this screen: nose up to climb, down to dive, roll to turn, tap its screen to boost.',
-  camera:'Hold a flat hand to the camera: fingertips up to climb, down to dive, tilt to turn, close a fist to boost. Either hand, swap any time.',
+  camera:'Camera control: steer with a bare hand, or with any object you hold up. Choose which on the camera screen.',
   touch:'A thumb on each half: both up to dive, both down to climb, one of each to turn. Double-tap to boost.'};
 const ck={Up:false,Down:false,Left:false,Right:false,Fist:false};let lostSince=0,handWarned=false,camPrev='simple';
 function syncControlUI(){for(const b of document.querySelectorAll('.ctlcard'))b.setAttribute('aria-pressed',String(b.dataset.ctl===settings.control));
@@ -1031,6 +1031,12 @@ function closeCamSetup(use){$('camSetup').hidden=true;
 for(const b of document.querySelectorAll('.ctlcard'))b.onclick=()=>{if(G.state==='menu')setControl(b.dataset.ctl);};
 $('camDone').onclick=()=>closeCamSetup(true);$('camCancel').onclick=()=>closeCamSetup(false);$('camRecalBtn').onclick=()=>{resetHandRange();beginRangeLearning();for(const k in ck)ck[k]=false;requestCalibration();};
 $('handSens').addEventListener('input',e=>setHandSens(e.target.value));
+function syncCamMode(){for(const b of $('camModeSeg').querySelectorAll('button'))b.setAttribute('aria-pressed',String(b.dataset.cam===hand.mode));const o=hand.mode==='object';
+  $('camTitle').textContent=o?'Any object is the glider':'Your hand is the glider';
+  const L=o?[['Raise it','climb'],['Lower it','dive'],['Tilt left','turn left'],['Tilt right','turn right'],['Push toward the camera','boost']]:[['Fingertips up','climb'],['Fingertips down','dive'],['Tilt left','turn left'],['Tilt right','turn right'],['Close a fist','boost']];
+  ['Up','Down','Left','Right','Fist'].forEach((k,i)=>{$('ck'+k).innerHTML='';$('ck'+k).append(L[i][0]+' ');const s=document.createElement('span');s.textContent=L[i][1];$('ck'+k).append(s);});}
+for(const b of $('camModeSeg').querySelectorAll('button'))b.onclick=()=>{setCamMode(b.dataset.cam);beginRangeLearning();for(const k in ck)ck[k]=false;syncCamMode();};
+syncCamMode();
 window.addEventListener('keydown',e=>{if((e.key==='c'||e.key==='C')&&hand.enabled&&!e.repeat){requestCalibration();toast('Hold your hand flat','good');}});
 /* phone glider pairing */
 let qrFor='';
@@ -1059,12 +1065,15 @@ function handHud(now){
   $('camHud').hidden=!(on&&!setup&&(G.state==='play'||G.state==='paused'));
   if(setup){
     $('camMsg').textContent=hand.status==='starting'?'Starting the camera and loading the hand tracker. Allow the camera if your browser asks.':hand.status==='error'?hand.error
+      :hand.mode==='object'&&!hand.calibrated&&hand.objState!=='learning'?'Step 1: keep the dashed box free of your object for a moment, so I can see you and the room without it. Pick something whose colour stands out from your clothes.'
+      :hand.mode==='object'&&!hand.calibrated?'Step 2: now hold your object inside the dashed box, the way you want to hold it when level, and keep it still while I learn it.'
+      :hand.mode==='object'&&!hand.tracking?'I lost the object. Bring it back into view, or press Start over to learn it again.'
       :!hand.tracking?'Hold one hand out toward the screen: flat, palm down, fingertips pointing straight at the camera, like a paper plane flying into it.':!hand.calibrated?'Good. Keep it flat and still for a moment so I can learn your level position.'
       :'You are flying it. Now do each move below as far as feels comfortable. I set the sensitivity from your own reach.';
     if(hand.tracking&&hand.calibrated){if(hand.rawPitch>0.26)ck.Up=true;if(hand.rawPitch<-0.26)ck.Down=true;if(hand.rawRoll<-0.24)ck.Left=true;if(hand.rawRoll>0.24)ck.Right=true;}
     for(const k in ck)$('ck'+k).classList.toggle('ok',ck[k]);
     $('camDone').disabled=!(on&&hand.calibrated);$('camRecalBtn').disabled=!on;
-    $('camSide').textContent=hand.tracking&&hand.side?'Following your '+hand.side+' hand':'';
+    $('camSide').textContent=hand.mode==='object'?(hand.calibrated?'The orange tint shows what I am following. If it covers the wrong things, press Start over with a more colourful object.':''):hand.tracking&&hand.side?'Following your '+hand.side+' hand':'';
   }
   if(on&&G.state==='play'&&settings.control==='camera'){
     if(hand.tracking){lostSince=0;handWarned=false;}

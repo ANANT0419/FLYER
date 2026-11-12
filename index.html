@@ -154,7 +154,8 @@
 <div class="overlay" id="camSetup" hidden>
   <div class="card camcard">
     <div class="eyebrow">Camera control</div>
-    <h2>Your hand is the glider</h2>
+    <h2 id="camTitle">Your hand is the glider</h2>
+    <span class="seg" id="camModeSeg" role="group" aria-label="What the camera follows" style="align-self:flex-start"><button data-cam="hand" aria-pressed="true">Bare hand</button><button data-cam="object" aria-pressed="false">Any object</button></span>
     <div class="camgrid">
       <canvas id="camSetupView" class="camview" aria-label="Camera view with your tracked hand"></canvas>
       <div class="camside">
