@@ -48,7 +48,7 @@ export function startPad(code) {
     const p = Math.max(-80, Math.min(80, beta - b0)), r = Math.max(-80, Math.min(80, gamma - g0));
     $('padWing').style.transform = `translateY(${(-p * 1.6).toFixed(1)}px) rotate(${r.toFixed(1)}deg)`;
     curP = p; curR = r; curT = performance.now();
-    curV = rateStep(rate, curT, [p, r], gyro);   // how fast it is tilting, so the big screen can predict past the delay
+    curV = rateStep(rate, curT, [p, r], gyro); nRead++;   // how fast it is tilting, so the big screen can predict past the delay
     sendTilt(false);   // send the moment the sensor reports, rather than waiting for the next beat
   }
   // the direct link gets every sensor reading (up to ~100 a second). The relay shares a message limit with everyone
@@ -63,6 +63,9 @@ export function startPad(code) {
   }
   // and a steady beat, so the big screen knows the phone is there even when it is held perfectly still
   setInterval(() => sendTilt(true), 50);
+  // once a second, a health note for the big screen's phone check: readings per second and whether the gyroscope is used
+  let nRead = 0;
+  setInterval(() => { if (up()) send({ st: [nRead, rate.ok[0] || rate.ok[1] ? 1 : gyro ? 2 : 0] }); nRead = 0; }, 1000);
   const echo = d => { if (d && d.p) send({ q: d.p, t: Math.round(performance.now() * 10) / 10 }); };   // our clock too, so the screen can date each reading
   function connect(quiet) {
     if (!quiet || !relayUp) stat('Connecting…');

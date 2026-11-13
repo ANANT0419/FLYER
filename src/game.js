@@ -512,11 +512,12 @@ vec3 col=mix(vec3(1.0,0.9,0.72),vec3(0.8,0.97,1.0),dash);gl_FragColor=vec4(col*a
 /* ================= the guided line ================= */
 // The route through the course: the line of the old wind current, and in the race canyon the line through every gate.
 // The glider rides it by itself as long as the player's tilt roughly matches what the next bend or dip needs.
-// Levels: win = how far off (in full-tilt units) still counts as right enough; str = how much of the steering the
-// line takes over once locked; pull = how firmly it draws you onto the line (per second).
-// lean = when a bend or dip clearly asks for a tilt, you must give at least this share of it, the right way round,
-// so even Easy is not an autopilot.
-const GUIDE={easy:{win:0.5,lean:0.3,str:0.9,pull:1.6,name:'Easy'},normal:{win:0.25,lean:0.5,str:0.6,pull:0.9,name:'Normal'},pro:{win:0.1,lean:0.7,str:0.15,pull:0.2,name:'Pro'}};
+// Your tilt always drives the glider 1:1 (bank, pitch, turn rate): the line never replaces it. The help acts only on
+// where you are: a gentle heading nudge and a sideways/up-down pull back onto the line, like lane-keeping in a car.
+// win = how far off (in full-tilt units) your tilt can be and still count as right enough; lean = when a bend or dip
+// clearly needs a tilt, the share of it you must give, the right way round; yawK/pitchK/pull = strength of the nudges.
+const GUIDE={easy:{win:0.5,lean:0.3,yawK:2.2,pitchK:0.07,pull:2.6,name:'Easy'},normal:{win:0.3,lean:0.45,yawK:1.2,pitchK:0.04,pull:1.4,name:'Normal'},pro:{win:0.1,lean:0.7,yawK:0.15,pitchK:0.008,pull:0.25,name:'Pro'},
+  off:{win:1e-4,lean:1,yawK:0,pitchK:0,pull:0,name:'Off'}};   // 'off' is only for tests (test/guide-response.cjs)
 const LINE_SPEED=0.15;                            // on the line you fly 15% faster
 let gateDh=[];                                    // race: how far each gate sits above the current's line, so the route threads it
 function routePoint(s,out){streamAt(s);let h=SH;
@@ -837,7 +838,7 @@ function drawThumbs(){
 
 /* ================= game state ================= */
 const G={state:'menu',mode:'main',pos:new THREE.Vector3(),yaw:0,pitch:0,roll:0,speed:70,s:0,d:0,idx:0,yawRate:0,pitchRate:0,
-  score:0,combo:0,comboT:0,gems:0,rings:0,crashes:0,boost:0.34,boostT:0,crashT:0,invuln:0,time:0,skim:false,inStream:false,lock:0,onLine:0,flow:1,lineOff:0,raceLvl:'',menuS:0,
+  score:0,combo:0,comboT:0,gems:0,rings:0,crashes:0,boost:0.34,boostT:0,crashT:0,invuln:0,time:0,skim:false,inStream:false,lock:0,onLine:0,flow:1,lineOff:0,helpYaw:0,helpPitch:0,raceLvl:'',menuS:0,
   armL:0,armR:0,pitchIn:0,turnIn:0,bumpT:0,gust:0,oobT:0,rescueT:0,inThermal:false,progS:0,progT:0};
 const dir=new THREE.Vector3();
 const trackYaw=()=>Math.atan2(-_t.x,-_t.z);
@@ -882,9 +883,8 @@ function collectRings(list){
 const _gq=new THREE.Vector3(),_gr=new THREE.Vector3();
 function guideLevel(){return RACE&&!G.solo&&room.status==='in'&&GUIDE[G.raceLvl]?G.raceLvl:settings.guide;}
 function guide(dt){
-  const GL=GUIDE[guideLevel()];routePoint(G.s,_gq);G.lineOff=_gq.distanceTo(G.pos);
-  // what the line needs: aim at a point on it a little under a second ahead (pure pursuit). The bend or dip it asks
-  // for stays the same while you follow it, so a bend always needs your tilt, never only the line's.
+  const GL=GUIDE[guideLevel()];routePoint(G.s,_gq);G.lineOff=_gq.distanceTo(G.pos);const dyNow=_gq.y-G.pos.y;
+  // what the line needs: aim at a point on it a little under a second ahead (pure pursuit)
   const look=clamp(G.speed*0.8,30,110);routePoint(Math.min(LEN,G.s+look),_gr);
   const dx=_gr.x-G.pos.x,dz=_gr.z-G.pos.z,dy=_gr.y-G.pos.y,hd=Math.hypot(dx,dz)||1;
   const wantYaw=Math.atan2(-dx,-dz),wantPitch=Math.atan2(dy,hd);
@@ -893,17 +893,19 @@ function guide(dt){
   const under=(inp,need)=>Math.abs(need)>0.15&&inp*Math.sign(need)<Math.abs(need)*GL.lean;   // not leaning into it
   const miss=Math.max(Math.hypot(G.pitchIn-needP,G.turnIn-needT),under(G.pitchIn,needP)||under(G.turnIn,needT)?GL.win*2:0);
   const near=1-smoothstep(45,90,G.lineOff);
+  // match follows your tilt almost at once (in ~0.1 s, lets go in ~0.25 s): no coasting along on an old good tilt
   const want=(1-smoothstep(GL.win,GL.win*2,miss))*near*(G.crashT>0?0:1);
-  G.lock+=(want-G.lock)*(1-Math.exp(-dt*(want>G.lock?3:1.6)));
+  G.lock+=(want-G.lock)*(1-Math.exp(-dt*(want>G.lock?10:4)));
   G.onLine=G.lock*(1-smoothstep(6,25,G.lineOff));G.miss=miss;G.needP=needP;G.needT=needT;
-  // once locked, the line takes over part of the steering (most of it on Easy, a little on Pro)
-  const k=G.lock*GL.str;G.effP=G.pitchIn+(needP-G.pitchIn)*k;G.effT=G.turnIn+(needT-G.turnIn)*k;
+  // the nudges: added on top of your tilt, based on where you are, so every change of tilt still shows in full
+  G.helpYaw=G.lock*GL.yawK*clamp(angDiff(wantYaw,G.yaw),-0.5,0.5);
+  G.helpPitch=G.lock*clamp(dyNow*GL.pitchK,-0.25,0.25);
 }
 // and draws you onto it sideways and up/down, never along it
 function linePull(dt){
-  const GL=GUIDE[guideLevel()],k=1-Math.exp(-dt*GL.pull*G.lock);if(k<=0)return;
+  const GL=GUIDE[guideLevel()],k=1-Math.exp(-dt*GL.pull*G.lock);if(k<=1e-4)return;
   locate();routePoint(G.s,_gq);frame(G.s);_gq.sub(G.pos);const along=_gq.dot(_t);_gq.addScaledVector(_t,-along);
-  G.pos.addScaledVector(_gq,k);}
+  _gq.y*=0.5;G.pos.addScaledVector(_gq,k);}   // softer up/down, so a climb or dive you make still shows
 
 function update(dt){
   const isTut=G.mode==='tut';G.time+=dt;
@@ -920,14 +922,14 @@ function update(dt){
   // where is the line?
   streamPoint(G.s,_sp);const streamD=SD;routePoint(G.s,_sp);const streamOff=_sp.distanceTo(G.pos);
   const fy=floorY(G.s),hRel=G.pos.y-fy;
-  guide(dt);pitchIn=G.effP;turnIn=G.effT;
+  guide(dt);
   G.inStream=G.onLine>0.5;frame(G.s);
-  let tgt=pitchIn*0.78-0.1;
+  let tgt=pitchIn*0.78-0.1+G.helpPitch;
   if(G.speed<34)tgt-=(34-G.speed)*0.025;
   if(hRel>200)tgt-=(hRel-200)*0.012;
   tgt-=Math.abs(Math.sin(G.roll))*0.1;tgt=clamp(tgt,-1.1,0.85);const prevPitch=G.pitch;G.pitch+=(tgt-G.pitch)*(direct?1-Math.exp(-dt*kP):Math.min(1,dt*kP));
   G.pitchRate+=((G.pitch-prevPitch)/Math.max(dt,1e-3)-G.pitchRate)*Math.min(1,dt*6);
-  const tyaw=trackYaw();let yawRate=turnIn*1.6;
+  const tyaw=trackYaw();let yawRate=turnIn*1.6+G.helpYaw;
   const assist=Math.abs(turnIn)<0.08?0.35:0.08;yawRate+=angDiff(tyaw-(G.d-streamD)*0.006,G.yaw)*assist;
   if(Math.abs(G.d)>125)yawRate+=angDiff(tyaw-Math.sign(G.d)*0.6,G.yaw)*1.2;
   // Coordinated turn: you bank first, and the bank is what curves your path (tighter at low speed, wider at high speed).
@@ -1078,7 +1080,7 @@ function updateCamera(dt,snap){
     const ff=clamp(CAM.fov+12+(G.speed-60)*0.15,CAM.fov+10,CAM.fov+34);camera.fov+=(ff-camera.fov)*Math.min(1,dt*3);camera.updateProjectionMatrix();return;}
   back.set(-Math.sin(G.yaw),Math.sin(G.pitch)*0.45,-Math.cos(G.yaw)).normalize();
   CUP.y=CAM.up;camPos.copy(G.pos).addScaledVector(back,-CAM.dist).add(CUP);const gy=groundAt(G.s,G.d)+3;if(camPos.y<gy)camPos.y=gy;
-  camera.position.lerp(camPos,snap?1:1-Math.exp(-dt*(G.direct?11:6.5)));camLook.copy(G.pos).addScaledVector(dir,12);camera.lookAt(camLook);camera.rotateZ(G.roll*0.3);
+  camera.position.lerp(camPos,snap?1:1-Math.exp(-dt*(settings.control==='phone'?20:G.direct?11:6.5)));   // phone: ~50 ms camera followcamLook.copy(G.pos).addScaledVector(dir,12);camera.lookAt(camLook);camera.rotateZ(G.roll*0.3);
   let shake=0;if(G.boostT>0)shake=0.08;if(G.crashT>0)shake=G.crashT*0.4;if(G.bumpT>0)shake=Math.max(shake,G.bumpT*0.25);shake=Math.max(shake,(G.gust||0)*0.06);
   if(shake){camera.position.x+=(Math.random()-0.5)*shake;camera.position.y+=(Math.random()-0.5)*shake;}
   const fov=clamp(CAM.fov+(G.speed-60)*0.13,CAM.fov-2,CAM.fov+20);camera.fov+=(fov-camera.fov)*Math.min(1,dt*3);camera.updateProjectionMatrix();
@@ -1159,7 +1161,7 @@ for(const b of document.querySelectorAll('.trackcard'))b.onclick=()=>{if(G.state
 window.addEventListener('keydown',e=>{if(e.repeat)return;if(e.key==='v'||e.key==='V'){setView(settings.view==='fp'?'3p':'fp');}});
 syncSettingsUI();updateTutBadge();
 
-function resetRun(){Object.assign(G,{state:'play',score:0,combo:0,comboT:0,gems:0,rings:0,crashes:0,boost:0.34,boostT:0,crashT:0,invuln:1,time:0,speed:72,bumpT:0,armL:0,armR:0,yawRate:0,pitchRate:0,gust:0,oobT:0,rescueT:0,inThermal:false,progS:30,progT:0,lock:0,onLine:0,flow:1,lineOff:0});thermals.forEach(t=>t.hit=false);$('fadeB').classList.remove('on');
+function resetRun(){Object.assign(G,{state:'play',score:0,combo:0,comboT:0,gems:0,rings:0,crashes:0,boost:0.34,boostT:0,crashT:0,invuln:1,time:0,speed:72,bumpT:0,armL:0,armR:0,yawRate:0,pitchRate:0,gust:0,oobT:0,rescueT:0,inThermal:false,progS:30,progT:0,lock:0,onLine:0,flow:1,lineOff:0,helpYaw:0,helpPitch:0});thermals.forEach(t=>t.hit=false);$('fadeB').classList.remove('on');
   placeAt(30,48);updateCamera(0,true);}
 function goFull(){if(!isTouch)return;try{const el=document.documentElement;if(el.requestFullscreen&&!document.fullscreenElement)el.requestFullscreen().then(()=>{try{screen.orientation.lock('landscape').catch(()=>{});}catch(e){}}).catch(()=>{});}catch(e){}}
 function start(){if(RACE){openLobby();return;}if(needCam())return;initAudio();if(actx&&actx.state==='suspended')actx.resume().catch(()=>{});G.mode='main';resetRun();
@@ -1315,6 +1317,9 @@ function closePhoneSetup(use){$('phoneSetup').hidden=true;
 $('padDone').onclick=()=>closePhoneSetup(true);$('padCancel').onclick=()=>closePhoneSetup(false);$('padSens').addEventListener('input',e=>setPhoneSens(e.target.value));
 onPhoneBoost(()=>{if(!$('phoneSetup').hidden)pk.Tap=true;if(G.state==='play')tryBoost();});
 let padLostSince=0,padSlowLogged=false;
+let screenFps=0,padChecked=0;
+// what the phone link looks like right now, in plain words: used on the setup screen and in the issue log
+function phoneCheck(){return (phone.via==='relay'?'relay link (slow)':'direct link')+' · network '+Math.round(phone.ms||0)+' ms · phone sends '+(phone.hz||'?')+' readings/s · gyroscope '+(phone.gyro||'?')+' · screen '+Math.round(screenFps)+' frames/s';}
 function phoneHud(now){
   if(!$('phoneSetup').hidden){
     if(phone.url&&qrFor!==phone.url){qrFor=phone.url;$('padUrl').textContent=phone.url;QRCode.toCanvas($('padQR'),phone.url,{width:360,margin:1,color:{dark:'#191d2e',light:'#fff6ea'}},err=>{if(err)logIssue('Phone glider','Could not draw the QR code: '+err.message);});}
@@ -1325,10 +1330,12 @@ function phoneHud(now){
     if(phone.live){const sp=phone.sp||0,sr=phone.sr||0;if(sp>9)pk.Up=true;if(sp<-9)pk.Down=true;if(sr<-11)pk.Left=true;if(sr>11)pk.Right=true;}
     for(const k in pk)$('pk'+k).classList.toggle('ok',pk[k]);
     if(phone.status==='connected'){const ms=Math.round(phone.ms||0),relay=phone.via==='relay';
-      $('padLink').textContent=(relay?'Linked through the relay (slower). Put both devices on the same Wi‑Fi for the direct link.':'Linked directly.')+(ms?' Network delay about '+ms+' ms'+(ms>60?' — that is high; the same Wi‑Fi, closer to the router, helps.':', and the screen predicts past it, so the glider moves with your hand.'):'');}
+      $('padLink').textContent='Phone check: '+phoneCheck()+'. '+(relay?'Linked through the relay (slower). Put both devices on the same Wi‑Fi for the direct link.':'Linked directly.')+(ms?' Network delay about '+ms+' ms'+(ms>60?' — that is high; the same Wi‑Fi, closer to the router, helps.':', and the screen predicts past it, so the glider moves with your hand.'):'');}
   }
   {const slow=settings.control==='phone'&&(G.state==='play'||G.state==='count')&&phone.status==='connected'&&phone.via==='relay';$('linkChip').hidden=!slow;
    if(slow)$('linkChip').textContent='PHONE ON SLOW LINK'+(phone.ms?' · '+Math.round(phone.ms)+' MS':'')+' · SAME WI‑FI FIXES IT';}
+  // a phone check in the issue log 8 s into each flight with the phone, so a report says where any delay comes from
+  if(settings.control==='phone'&&G.state==='play'&&phone.live&&padChecked>=0){if(!padChecked)padChecked=now;if(now-padChecked>8000){padChecked=-1;logIssue('Phone check',phoneCheck()+'. Slow spots: relay link, network over 40 ms, under 50 readings/s, or under 50 frames/s.');}}
   if(settings.control==='phone'&&G.state==='play'){
     if(phone.ms>110&&!padSlowLogged){padSlowLogged=true;logIssue('Phone glider','The phone link is slow (about '+Math.round(phone.ms)+' ms, '+(phone.via==='relay'?'through the relay':'direct')+'). Same Wi‑Fi for both devices makes it quicker.');}
     if(phone.live)padLostSince=0;else{if(!padLostSince)padLostSince=now;if(now-padLostSince>2500){pause();$('pauseNote').textContent='Paused because the phone stopped sending its tilt. Wake the phone and check it still says Connected, then resume.';}}
@@ -1377,7 +1384,7 @@ function loop(now){requestAnimationFrame(loop);let dt=(now-last)/1000;last=now;i
   try{if(G.state==='play'){update(dt);updateHUD();if(G.mode==='tut')tutPads();}else $('oob').hidden=true;
     updateCamera(dt,false);updateVisuals(dt,now/1000);drawThumbs();updateHand(now);handHud(now);updatePhone(now);phoneHud(now);updateRaceNet(now);post.render(now/1000,G.state==='play'?clamp((G.speed-70)/100,0,1):0);}
   catch(e){logIssue('Frame',e.message+(e.stack?' | '+String(e.stack).split('\n')[1]:''));}
-  fpsF++;fpsT+=dt;if(fpsT>=1){const fps=fpsF/fpsT;fpsF=0;fpsT=0;
+  fpsF++;fpsT+=dt;if(fpsT>=1){const fps=fpsF/fpsT;fpsF=0;fpsT=0;screenFps=fps;
     if(G.state==='play'&&fps<50){lowCount++;if(lowCount>=2&&stepQuality(fps))lowCount=0;}else lowCount=0;
   }}
 resize();placeAt(30,48);updateCamera(0,true);requestAnimationFrame(loop);

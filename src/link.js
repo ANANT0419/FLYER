@@ -56,6 +56,7 @@ function onData(d, viaRelay) {
     st.p = p; st.r = r; phone.pitch = p; phone.roll = r; lastMsg = t; phone.via = directOpen() ? 'direct' : 'relay';
   }
   else if (d.q) { const now = performance.now(), rtt = now - d.q; if (rtt >= 0 && rtt < 5000) phone.ms = phone.ms ? phone.ms * 0.7 + rtt / 2 * 0.3 : rtt / 2; if (d.t != null) clockPong(clock, d.q, +d.t, now); pings++; }
+  else if (d.st) { phone.hz = +d.st[0] || 0; phone.gyro = ['off', 'on', 'learning'][+d.st[1]] || 'off'; }
   else if (d.h && relay) relay.send({ k: 1 });
   else if (d.b) for (const cb of boostCbs) { try { cb(); } catch (_) {} }
 }

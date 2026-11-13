@@ -19,7 +19,7 @@ const { chromium } = require('playwright');
   await scr.evaluate(() => setInterval(() => window.__pad.updatePhone(performance.now()), 16));
   const W = 2 * Math.PI * 0.8;
   const padT0 = await pad.evaluate(W => { const t0 = performance.timeOrigin + performance.now();
-    setInterval(() => { const t = (performance.timeOrigin + performance.now() - t0) / 1000, g = 20 * Math.sin(W * t), gr = 20 * W * Math.cos(W * t) * 180 / Math.PI;
+    setInterval(() => { const t = (performance.timeOrigin + performance.now() - t0) / 1000, g = 20 * Math.sin(W * t), gr = 20 * W * Math.cos(W * t);   // deg/s, as phones report it
       window.dispatchEvent(new DeviceMotionEvent('devicemotion', { rotationRate: { alpha: 0, beta: 0, gamma: gr } }));
       window.dispatchEvent(new DeviceOrientationEvent('deviceorientation', { alpha: 0, beta: 0, gamma: g })); }, 1000 / 60); return t0; }, W);
   await scr.waitForTimeout(3500);
@@ -34,6 +34,7 @@ const { chromium } = require('playwright');
   console.log('clock sync:', JSON.stringify(pred.clock), 'one-way delay estimate', pred.ms.toFixed(1), 'ms');
   console.log('last reading as received trails the phone by', fit(raw.out)[0], 'ms (rms', fit(raw.out)[1], 'deg)');
   console.log('with prediction it trails by', fit(pred.out)[0], 'ms (rms', fit(pred.out)[1], 'deg), over', pred.out.length, 'samples');
+  console.log('phone check:', await scr.evaluate(() => { const p = window.__pad.phone; return [p.via, Math.round(p.ms) + ' ms', p.hz + ' readings/s', 'gyro ' + p.gyro].join(' · '); }));
   console.log('errors:', errs.length ? errs : 'none');
   await b.close(); await b2.close();
 })();
