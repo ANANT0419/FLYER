@@ -923,18 +923,28 @@ const _gq=new THREE.Vector3(),_gr=new THREE.Vector3();
 function guideLevel(){return RACE&&!G.solo&&room.status==='in'&&GUIDE[G.raceLvl]?G.raceLvl:settings.guide;}
 function guide(dt){
   const GL=GUIDE[guideLevel()];routePoint(G.s,_gq);G.lineOff=_gq.distanceTo(G.pos);const dyNow=_gq.y-G.pos.y;
-  // what the line needs: aim at a point on it a little under a second ahead (pure pursuit)
-  const look=clamp(G.speed*0.8,30,110);routePoint(Math.min(LEN,G.s+look),_gr);
+  // what the line needs: aim at a point on it ~1.1 s ahead (pure pursuit). Further ahead = bends ask for your tilt earlier
+  // and more gently (owner's recording: a coaster bend went from 'nothing' to 'full tilt' in ~1 s and threw them 100 m off)
+  const look=clamp(G.speed*1.1,40,140);routePoint(Math.min(LEN,G.s+look),_gr);
   const dx=_gr.x-G.pos.x,dz=_gr.z-G.pos.z,dy=_gr.y-G.pos.y,hd=Math.hypot(dx,dz)||1;
   const wantYaw=Math.atan2(-dx,-dz),wantPitch=Math.atan2(dy,hd);
   const needP=clamp((wantPitch+0.1)/0.78,-1,1);   // inputs here are already in game terms (after invert)
   const needT=clamp(angDiff(wantYaw,G.yaw)*2*Math.max(G.speed,30)/look/1.6,-1,1);
   const under=(inp,need)=>Math.abs(need)>0.15&&inp*Math.sign(need)<Math.abs(need)*GL.lean;   // not leaning into it
   const miss=Math.max(Math.hypot(G.pitchIn-needP,G.turnIn-needT),under(G.pitchIn,needP)||under(G.turnIn,needT)?GL.win*2:0);
-  const near=1-smoothstep(45,90,G.lineOff);
+  const near=1-smoothstep(70,140,G.lineOff);
   // match: off in ~0.25 s when your tilt stops matching (no coasting on an old good tilt). On: at once when you are
   // already near the line, but faded in over ~0.7 s when you are still far from it, so joining never jumps.
-  const want=(1-smoothstep(GL.win,GL.win*2,miss))*near*(G.crashT>0?0:1);
+  // three ways to count as "right enough": (1) your tilt matches what the line needs; (2) you are already on it and
+  // pointing along it (being on route is the proof, owner: "if the player is doing right enough control, the glide is
+  // smooth and on route") unless you ignore a real bend or dip; (3) far off, you are steering back toward it the right
+  // way round with a real tilt: then the help joins in partly and brings you in on a gentle curve.
+  const tilt=(1-smoothstep(GL.win,GL.win*2,miss));
+  const ignoring=under(G.pitchIn,needP)||under(G.turnIn,needT);
+  const onRoute=ignoring?0:(1-smoothstep(5,12,G.lineOff))*(1-smoothstep(0.15,0.35,Math.abs(angDiff(wantYaw,G.yaw))));
+  const nm=Math.hypot(needP,needT),im=Math.hypot(G.pitchIn,G.turnIn),cosv=nm>0.01&&im>0.01?(G.pitchIn*needP+G.turnIn*needT)/(nm*im):0;
+  const back=nm>0.45?0.6*smoothstep(0.5,0.85,cosv)*smoothstep(0.15,0.4,im):0;
+  const want=Math.max(tilt,onRoute,back)*near*(G.crashT>0?0:1);
   G.lock+=(want-G.lock)*(1-Math.exp(-dt*(want>G.lock?10-8.5*smoothstep(4,15,G.lineOff):4)));
   G.onLine=G.lock*(1-smoothstep(6,25,G.lineOff));G.miss=miss;G.needP=needP;G.needT=needT;
   // the nudges: added on top of your tilt, based on where you are, so every change of tilt still shows in full.
@@ -1437,15 +1447,22 @@ const QSTEPS=[
 function recSample(){return {s:G.s,off:G.lineOff,lk:G.lock,ol:G.onLine,pi:G.pitchIn,ti:G.turnIn,np:G.needP,nt:G.needT,hy:G.helpYaw,hp:G.helpPitch,
   p:G.pitch,r:G.roll,yw:G.yaw,v:G.speed*G.flow,y:G.pos.y-floorY(G.s),gy:G.pos.y-groundAt(G.s,G.d),
   pp:phone.live?phone.pitch:null,pr:phone.live?phone.roll:null,fp:phone.live?phone.sp:null,fr:phone.live?phone.sr:null,pl:phone.status==='connected'?(phone.live?1:0):null,ms:phone.ms||null};}
-function stepQuality(fps){for(const st of QSTEPS){const what=st();if(what){logIssue('Performance','Frame rate dropped to '+Math.round(fps)+' fps, so I '+what+' to keep play smooth.');return true;}}return false;}
+// Each step is remembered on this device, so the next page load starts at a level that runs smoothly: a step taken
+// mid-flight freezes the picture for 60-220 ms (owner's flight recordings: 2-3 such freezes in the first 4 s of every flight).
+function stepQuality(fps){for(const st of QSTEPS){const what=st();if(what){store.set('qsteps',store.get('qsteps',0)+1);logIssue('Performance','Frame rate dropped to '+Math.round(fps)+' fps, so I '+what+' to keep play smooth (remembered for next time).');return true;}}return false;}
+// start where this device settled last time (unless ?fx= forces a level)
+if(!new URLSearchParams(location.search).has('fx')){const n=store.get('qsteps',0);let done=0;for(let k=0;k<n;k++){let any=false;for(const st of QSTEPS){if(st()){any=true;done++;break;}}if(!any)break;}}
 function loop(now){requestAnimationFrame(loop);let dt=(now-last)/1000;const rawMs=now-last;last=now;if(dt>0.05)dt=0.05;if(dt<=0)dt=0.016;timeU.value=now/1000;
   try{if(G.state==='play'){update(dt);updateHUD();if(G._rec)recFrame(now,rawMs,recSample);if(G.mode==='tut')tutPads();}else $('oob').hidden=true;
     updateCamera(dt,false);updateVisuals(dt,now/1000);drawThumbs();updateHand(now);handHud(now);updatePhone(now);phoneHud(now);updateRaceNet(now);post.render(now/1000,G.state==='play'?clamp((G.speed-70)/100,0,1):0);}
   catch(e){logIssue('Frame',e.message+(e.stack?' | '+String(e.stack).split('\n')[1]:''));}
   fpsF++;fpsT+=dt;if(fpsT>=1){const fps=fpsF/fpsT;fpsF=0;fpsT=0;screenFps=fps;
-    if(G.state==='play'&&fps<50){lowCount++;if(lowCount>=2&&stepQuality(fps))lowCount=0;}else lowCount=0;
+    // also on the menu (it draws the same canyon), so the adjusting happens before you fly, not during the first bend
+    if((G.state==='play'||G.state==='menu')&&fps<50&&!document.hidden){lowCount++;if(lowCount>=2&&stepQuality(fps))lowCount=0;}else lowCount=0;
   }}
-resize();placeAt(30,48);updateCamera(0,true);requestAnimationFrame(loop);
+resize();placeAt(30,48);updateCamera(0,true);
+try{renderer.compile(scene,camera);}catch(e){}   // prepare every material's shader now, not the first time it comes into view
+requestAnimationFrame(loop);
 // ?debug: test hook for test/guide-sim.cjs (steps the flight without drawing)
-if(/[?&]debug\b/.test(location.search))window.__game={scene,ribbonMat,guideLevel,G,update,settings,start,beginRace,routePoint,LEN,FINISH_S,GUIDE,snapCam:()=>updateCamera(0,true),render:t=>post.render(t,0),CAM,camera,recFrame,recSample,updateCamera,updateVisuals,updateHUD,startTutorial,pause,resume,toMenu,player};
+if(/[?&]debug\b/.test(location.search))window.__game={quality:()=>({level:post.level,pr:renderer.getPixelRatio()}),scene,ribbonMat,guideLevel,G,update,settings,start,beginRace,routePoint,LEN,FINISH_S,GUIDE,snapCam:()=>updateCamera(0,true),render:t=>post.render(t,0),CAM,camera,recFrame,recSample,updateCamera,updateVisuals,updateHUD,startTutorial,pause,resume,toMenu,player};
 })();
