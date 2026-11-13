@@ -59,7 +59,7 @@ const scene=new THREE.Scene();
 const HORIZON=new THREE.Color('#f7b98c'),SKYTOP=new THREE.Color('#27477a'),SKYLOW=new THREE.Color('#8a6688');
 scene.fog=new THREE.Fog(HORIZON.clone(),200,1500);
 const camera=new THREE.PerspectiveCamera(66,1,0.3,3000);
-const CAM={dist:10.5,up:3.3,fov:62};
+const CAM={dist:10.5,up:3.3,fov:62,look:12};   // chase camera: metres behind, metres up, field of view, how far ahead of the glider it looks
 let post=null;
 function resize(){const w=window.innerWidth,h=window.innerHeight;renderer.setSize(w,h,false);if(post)post.setSize(w,h,pixelRatio);camera.aspect=w/h;camera.updateProjectionMatrix();
   if(w<h)Object.assign(CAM,{dist:9,up:2.9,fov:80});else if(isTouch||w<820)Object.assign(CAM,{dist:8.4,up:2.6,fov:64});else Object.assign(CAM,{dist:10.5,up:3.3,fov:62});}
@@ -516,8 +516,8 @@ vec3 col=mix(vec3(1.0,0.9,0.72),vec3(0.8,0.97,1.0),dash);gl_FragColor=vec4(col*a
 // where you are: a gentle heading nudge and a sideways/up-down pull back onto the line, like lane-keeping in a car.
 // win = how far off (in full-tilt units) your tilt can be and still count as right enough; lean = when a bend or dip
 // clearly needs a tilt, the share of it you must give, the right way round; yawK/pitchK/pull = strength of the nudges.
-const GUIDE={easy:{win:0.5,lean:0.3,yawK:2.2,pitchK:0.07,pull:2.6,name:'Easy'},normal:{win:0.3,lean:0.45,yawK:1.2,pitchK:0.04,pull:1.4,name:'Normal'},pro:{win:0.1,lean:0.7,yawK:0.15,pitchK:0.008,pull:0.25,name:'Pro'},
-  off:{win:1e-4,lean:1,yawK:0,pitchK:0,pull:0,name:'Off'}};   // 'off' is only for tests (test/guide-response.cjs)
+const GUIDE={easy:{win:0.5,lean:0.3,yawK:2.2,pitchK:0.07,pull:2.6,pullMax:8,name:'Easy'},normal:{win:0.3,lean:0.45,yawK:1.2,pitchK:0.04,pull:1.4,pullMax:5,name:'Normal'},pro:{win:0.1,lean:0.7,yawK:0.15,pitchK:0.008,pull:0.25,pullMax:1,name:'Pro'},
+  off:{win:1e-4,lean:1,yawK:0,pitchK:0,pull:0,pullMax:0,name:'Off'}};   // 'off' is only for tests (test/guide-response.cjs)
 const LINE_SPEED=0.15;                            // on the line you fly 15% faster
 let gateDh=[];                                    // race: how far each gate sits above the current's line, so the route threads it
 function routePoint(s,out){streamAt(s);let h=SH;
@@ -893,19 +893,25 @@ function guide(dt){
   const under=(inp,need)=>Math.abs(need)>0.15&&inp*Math.sign(need)<Math.abs(need)*GL.lean;   // not leaning into it
   const miss=Math.max(Math.hypot(G.pitchIn-needP,G.turnIn-needT),under(G.pitchIn,needP)||under(G.turnIn,needT)?GL.win*2:0);
   const near=1-smoothstep(45,90,G.lineOff);
-  // match follows your tilt almost at once (in ~0.1 s, lets go in ~0.25 s): no coasting along on an old good tilt
+  // match: off in ~0.25 s when your tilt stops matching (no coasting on an old good tilt). On: at once when you are
+  // already near the line, but faded in over ~0.7 s when you are still far from it, so joining never jumps.
   const want=(1-smoothstep(GL.win,GL.win*2,miss))*near*(G.crashT>0?0:1);
-  G.lock+=(want-G.lock)*(1-Math.exp(-dt*(want>G.lock?10:4)));
+  G.lock+=(want-G.lock)*(1-Math.exp(-dt*(want>G.lock?10-8.5*smoothstep(4,15,G.lineOff):4)));
   G.onLine=G.lock*(1-smoothstep(6,25,G.lineOff));G.miss=miss;G.needP=needP;G.needT=needT;
-  // the nudges: added on top of your tilt, based on where you are, so every change of tilt still shows in full
-  G.helpYaw=G.lock*GL.yawK*clamp(angDiff(wantYaw,G.yaw),-0.5,0.5);
+  // the nudges: added on top of your tilt, based on where you are, so every change of tilt still shows in full.
+  // From further off they aim at a point on the line further ahead (4 m along per metre off: never steeper than ~14
+  // degrees), so you merge in on a natural curve rather than being yanked straight at it.
+  const L=clamp(Math.max(look,G.lineOff*4),30,400);routePoint(Math.min(LEN,G.s+L),_gr);
+  const mYaw=Math.atan2(-(_gr.x-G.pos.x),-(_gr.z-G.pos.z));
+  G.helpYaw=G.lock*GL.yawK*clamp(angDiff(mYaw,G.yaw),-0.5,0.5);
   G.helpPitch=G.lock*clamp(dyNow*GL.pitchK,-0.25,0.25);
 }
 // and draws you onto it sideways and up/down, never along it
 function linePull(dt){
+  // never faster than pullMax metres a second, so from further off it is a gentle drift in, never a yank
   const GL=GUIDE[guideLevel()],k=1-Math.exp(-dt*GL.pull*G.lock);if(k<=1e-4)return;
   locate();routePoint(G.s,_gq);frame(G.s);_gq.sub(G.pos);const along=_gq.dot(_t);_gq.addScaledVector(_t,-along);
-  _gq.y*=0.5;G.pos.addScaledVector(_gq,k);}   // softer up/down, so a climb or dive you make still shows
+  _gq.y*=0.5;_gq.multiplyScalar(k);const m=_gq.length(),mx=GL.pullMax*G.lock*dt;if(m>mx)_gq.multiplyScalar(mx/m);G.pos.add(_gq);}   // softer up/down, so a climb or dive you make still shows
 
 function update(dt){
   const isTut=G.mode==='tut';G.time+=dt;
@@ -1080,7 +1086,7 @@ function updateCamera(dt,snap){
     const ff=clamp(CAM.fov+12+(G.speed-60)*0.15,CAM.fov+10,CAM.fov+34);camera.fov+=(ff-camera.fov)*Math.min(1,dt*3);camera.updateProjectionMatrix();return;}
   back.set(-Math.sin(G.yaw),Math.sin(G.pitch)*0.45,-Math.cos(G.yaw)).normalize();
   CUP.y=CAM.up;camPos.copy(G.pos).addScaledVector(back,-CAM.dist).add(CUP);const gy=groundAt(G.s,G.d)+3;if(camPos.y<gy)camPos.y=gy;
-  camera.position.lerp(camPos,snap?1:1-Math.exp(-dt*(G.direct?11:6.5)));camLook.copy(G.pos).addScaledVector(dir,12);camera.lookAt(camLook);camera.rotateZ(G.roll*0.3);
+  camera.position.lerp(camPos,snap?1:1-Math.exp(-dt*(G.direct?11:6.5)));camLook.copy(G.pos).addScaledVector(dir,CAM.look);camera.lookAt(camLook);camera.rotateZ(G.roll*0.3);
   let shake=0;if(G.boostT>0)shake=0.08;if(G.crashT>0)shake=G.crashT*0.4;if(G.bumpT>0)shake=Math.max(shake,G.bumpT*0.25);shake=Math.max(shake,(G.gust||0)*0.06);
   if(shake){camera.position.x+=(Math.random()-0.5)*shake;camera.position.y+=(Math.random()-0.5)*shake;}
   const fov=clamp(CAM.fov+(G.speed-60)*0.13,CAM.fov-2,CAM.fov+20);camera.fov+=(fov-camera.fov)*Math.min(1,dt*3);camera.updateProjectionMatrix();
@@ -1389,5 +1395,5 @@ function loop(now){requestAnimationFrame(loop);let dt=(now-last)/1000;last=now;i
   }}
 resize();placeAt(30,48);updateCamera(0,true);requestAnimationFrame(loop);
 // ?debug: test hook for test/guide-sim.cjs (steps the flight without drawing)
-if(/[?&]debug\b/.test(location.search))window.__game={scene,ribbonMat,guideLevel,G,update,settings,start,beginRace,routePoint,LEN,FINISH_S,GUIDE,snapCam:()=>updateCamera(0,true),camera,updateCamera,updateVisuals,updateHUD,startTutorial,pause,resume,toMenu,player};
+if(/[?&]debug\b/.test(location.search))window.__game={scene,ribbonMat,guideLevel,G,update,settings,start,beginRace,routePoint,LEN,FINISH_S,GUIDE,snapCam:()=>updateCamera(0,true),render:t=>post.render(t,0),CAM,camera,updateCamera,updateVisuals,updateHUD,startTutorial,pause,resume,toMenu,player};
 })();
