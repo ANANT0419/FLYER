@@ -4,7 +4,7 @@
 import { Peer } from 'peerjs';
 import { joinRelay } from './relay.js';
 import { rtcAnswer } from './rtc.js';
-import { makeClock, clockPong, predict } from './predict.js';
+import { makeClock, clockPong, predict, euroStep } from './predict.js';
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const load = (k, d) => { try { const v = JSON.parse(localStorage.getItem('flyer.' + k)); return v == null ? d : v; } catch (_) { return d; } };
@@ -61,7 +61,7 @@ function onData(d, viaRelay) {
   else if (d.b) for (const cb of boostCbs) { try { cb(); } catch (_) {} }
 }
 let peer = null, conn = null, lastMsg = 0, sp = 0, sr = 0, lastT = 0, lastPing = 0, lastPhoneT = -1e12, pings = 0;
-const st = { p: 0, r: 0, vp: 0, vr: 0, at: 0 }, clock = makeClock();
+const st = { p: 0, r: 0, vp: 0, vr: 0, at: 0 }, clock = makeClock(), eP = {}, eR = {};
 const boostCbs = [];
 export function onPhoneBoost(cb) { boostCbs.push(cb); }
 export function setPhoneSens(v) { phone.sens = clamp(+v || 1, 0.6, 1.6); save('padSens', phone.sens); }
@@ -112,10 +112,12 @@ export function updatePhone(now) {
   // Draw where the phone is now, not where it was: carry the last reading forward by its age plus the time until this
   // frame is on the display (~20 ms) and the game's own smoothing (~30 ms), using how fast the phone was turning.
   const relay = phone.via === 'relay';
-  const [tp, tr] = phone.live ? predict(st, now, 20 + 1000 / 60 + 1000 / 70, relay ? 260 : 160, relay ? 25 : 18) : [0, 0];
+  // only predict far with the gyroscope's clean rates; until it is learned, the change in angle is noisier, so lead a little only
+  const gy = phone.gyro === 'on', lead = gy ? (relay ? 25 : 18) : 4;
+  const [tp, tr] = phone.live ? predict(st, now, 20 + 1000 / 60 + 1000 / 70, relay ? 260 : gy ? 160 : 90, lead) : [0, 0];
   phone.lead = phone.live ? Math.round(Math.min(relay ? 260 : 160, now - st.at + 50)) : 0;
-  const g = 1 - Math.exp(-dt * (phone.live ? 60 : 6));   // ease to level if the messages stop
-  sp += (tp - sp) * g; sr += (tr - sr) * g;
+  if (phone.live) { sp = euroStep(eP, tp, st.vp, dt); sr = euroStep(eR, tr, st.vr, dt); }   // steady when still, quick when turning
+  else { const g = 1 - Math.exp(-dt * 6); sp += (0 - sp) * g; sr += (0 - sr) * g; eP.v = sp; eR.v = sr; }   // ease to level if the messages stop
   const p = shape(sp * phone.sens, PITCH_DEAD, PITCH_FULL), t = shape(-sr * phone.sens, ROLL_DEAD, ROLL_FULL);   // t + = turn left
   phone.L = phone.live ? clamp(p + t, -1, 1) : 0; phone.R = phone.live ? clamp(p - t, -1, 1) : 0;
   phone.sp = sp; phone.sr = sr;

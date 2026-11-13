@@ -856,7 +856,7 @@ function tryBoost(){if(G.state!=='play'||G.boostT>0)return;
 function updraft(dt){G.inThermal=false;for(const th of thermals){if(Math.abs(th.s-G.s)>25)continue;const dx=G.pos.x-th.c.x,dz=G.pos.z-th.c.z,dd=Math.sqrt(dx*dx+dz*dz);
   if(dd<th.r&&G.pos.y<th.c.y+150){G.inThermal=true;const k=1-dd/th.r;G.pos.y+=20*k*dt;G.speed=Math.min(160,G.speed+4*k*dt);if(!th.hit){th.hit=true;toast('Updraft!','gem');tone(440,0.5,'sine',0.05,1.6);}}}}
 function startRescue(){G.rescueT=0.45;$('fadeB').classList.add('on');}
-function finishRescue(){placeAt(clamp(G.s,30,LEN-400),0);G.progS=G.s;G.progT=0;G.speed=70;G.invuln=1.5;G.combo=0;G.oobT=0;$('fadeB').classList.remove('on');toast('Back on the line','good');}
+function finishRescue(){placeAt(clamp(G.s,30,LEN-400),0);G.progS=G.s;G.progT=0;G.speed=70;G.invuln=1.5;G.combo=0;G.oobT=0;$('fadeB').classList.remove('on');updateCamera(0,true);toast('Back on the line','good');}
 function crash(){G.crashes++;G.crashT=1.1;G.combo=0;G.comboT=0;G.speed=0;toast('Bonk! Combo lost','bad');tone(110,0.4,'triangle',0.15,0.5);
   const f=$('flash');f.style.opacity=1;setTimeout(()=>f.style.opacity=0,350);buzz(120);}
 function softBump(){G.bumpT=0.6;G.pitch=Math.max(G.pitch,0.25);G.speed=Math.max(G.speed*0.85,45);if(!G._bumpMsg||G.time-G._bumpMsg>3){toast('Careful, pull up','bad');G._bumpMsg=G.time;}}
@@ -910,11 +910,11 @@ function linePull(dt){
 function update(dt){
   const isTut=G.mode==='tut';G.time+=dt;
   if(G.rescueT>0){G.rescueT-=dt;if(G.rescueT<=0)finishRescue();return;}
-  if(G.crashT>0){G.crashT-=dt;if(G.crashT<=0){placeAt(Math.max(30,G.s-50),46);G.speed=62;G.invuln=1.6;}return;}
+  if(G.crashT>0){G.crashT-=dt;if(G.crashT<=0){placeAt(Math.max(30,G.s-50),46);G.speed=62;G.invuln=1.6;updateCamera(0,true);}return;}   // camera jumps with you, no swing across the canyon
   // Tilt controls (phone, camera) are position controls: the glider should match your hand at once, so they skip the
-  // "heavy plane" easing that gives keys and mouse their weight. Phone: ~15 ms (its readings are clean and the screen
-  // already predicts past the delay, link.js); camera: ~70 ms (hand tracking is noisier); keys and mouse ~300 ms.
-  const direct=settings.control==='phone'||settings.control==='camera',ph=settings.control==='phone',kA=direct?30:10,kP=ph?70:direct?14:3.2,kR=ph?70:direct?14:4.2;G.direct=direct;
+  // "heavy plane" easing that gives keys and mouse their weight. Phone: ~30 ms (the screen already predicts past the delay
+  // and filters tremor, link.js; faster let hand shake through); camera: ~70 ms (hand tracking is noisier); keys ~300 ms.
+  const direct=settings.control==='phone'||settings.control==='camera',ph=settings.control==='phone',kA=direct?30:10,kP=ph?35:direct?14:3.2,kR=ph?35:direct?14:4.2;G.direct=direct;
   const inp=readInput(dt);G.armL+=(inp.L-G.armL)*(1-Math.exp(-dt*kA));G.armR+=(inp.R-G.armR)*(1-Math.exp(-dt*kA));
   let pitchIn=(inp.L+inp.R)/2;if(settings.invert)pitchIn=-pitchIn;let turnIn=(inp.L-inp.R)/2;
   if(G.bot){if(G.bot==='follow'){pitchIn=G.needP||0;turnIn=G.needT||0;}else{pitchIn=G.bot.p;turnIn=G.bot.t;}}   // test hook (?debug): a scripted pilot
@@ -1080,7 +1080,7 @@ function updateCamera(dt,snap){
     const ff=clamp(CAM.fov+12+(G.speed-60)*0.15,CAM.fov+10,CAM.fov+34);camera.fov+=(ff-camera.fov)*Math.min(1,dt*3);camera.updateProjectionMatrix();return;}
   back.set(-Math.sin(G.yaw),Math.sin(G.pitch)*0.45,-Math.cos(G.yaw)).normalize();
   CUP.y=CAM.up;camPos.copy(G.pos).addScaledVector(back,-CAM.dist).add(CUP);const gy=groundAt(G.s,G.d)+3;if(camPos.y<gy)camPos.y=gy;
-  camera.position.lerp(camPos,snap?1:1-Math.exp(-dt*(settings.control==='phone'?20:G.direct?11:6.5)));   // phone: ~50 ms camera followcamLook.copy(G.pos).addScaledVector(dir,12);camera.lookAt(camLook);camera.rotateZ(G.roll*0.3);
+  camera.position.lerp(camPos,snap?1:1-Math.exp(-dt*(G.direct?11:6.5)));camLook.copy(G.pos).addScaledVector(dir,12);camera.lookAt(camLook);camera.rotateZ(G.roll*0.3);
   let shake=0;if(G.boostT>0)shake=0.08;if(G.crashT>0)shake=G.crashT*0.4;if(G.bumpT>0)shake=Math.max(shake,G.bumpT*0.25);shake=Math.max(shake,(G.gust||0)*0.06);
   if(shake){camera.position.x+=(Math.random()-0.5)*shake;camera.position.y+=(Math.random()-0.5)*shake;}
   const fov=clamp(CAM.fov+(G.speed-60)*0.13,CAM.fov-2,CAM.fov+20);camera.fov+=(fov-camera.fov)*Math.min(1,dt*3);camera.updateProjectionMatrix();
@@ -1389,5 +1389,5 @@ function loop(now){requestAnimationFrame(loop);let dt=(now-last)/1000;last=now;i
   }}
 resize();placeAt(30,48);updateCamera(0,true);requestAnimationFrame(loop);
 // ?debug: test hook for test/guide-sim.cjs (steps the flight without drawing)
-if(/[?&]debug\b/.test(location.search))window.__game={scene,ribbonMat,guideLevel,G,update,settings,start,beginRace,routePoint,LEN,FINISH_S,GUIDE,snapCam:()=>updateCamera(0,true)};
+if(/[?&]debug\b/.test(location.search))window.__game={scene,ribbonMat,guideLevel,G,update,settings,start,beginRace,routePoint,LEN,FINISH_S,GUIDE,snapCam:()=>updateCamera(0,true),camera,updateCamera,updateVisuals,updateHUD,startTutorial,pause,resume,toMenu,player};
 })();

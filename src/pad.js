@@ -98,8 +98,8 @@ export function startPad(code) {
         if (asks[0]) refused = (await asks[0]) !== 'granted';
       } catch (_) { refused = true; }
       window.addEventListener('deviceorientation', onTilt);
-      // the gyroscope: rotation speed around the phone's side-to-side axis (nose up/down) and its long axis (roll)
-      window.addEventListener('devicemotion', e => { const q = e.rotationRate; gyro = q && q.beta != null && q.gamma != null ? [q.beta, q.gamma] : null; });
+      // the gyroscope: how fast the phone is turning about each of its three axes
+      window.addEventListener('devicemotion', e => { const q = e.rotationRate; gyro = q && q.alpha != null && q.beta != null && q.gamma != null ? [q.alpha, q.beta, q.gamma] : null; });   // all three: which is which is learned
       started = true;
       // only complain if no tilt actually arrives: some browsers answer the question oddly but still deliver the data
       setTimeout(() => { if (!gotSensor) $('padHint').textContent = refused ? 'Motion access was refused. Allow motion sensors for this site in the browser settings, then reload.' : 'This device is not reporting any tilt. Phone glider needs a phone with motion sensors.'; }, 2500);

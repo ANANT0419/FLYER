@@ -9,7 +9,8 @@ const { chromium } = require('playwright');
   // DELAY=ms adds that much network delay each way (both pages hold every data-channel message back)
   const lag = +process.env.DELAY || 0;
   const slow = d => { const send = RTCDataChannel.prototype.send; RTCDataChannel.prototype.send = function (m) { setTimeout(() => { try { send.call(this, m); } catch (_) {} }, d); }; };
-  if (lag) { await scr.addInitScript(slow, lag); await ctx2.addInitScript(slow, lag); } const errs = []; scr.on('pageerror', e => errs.push('screen: ' + e.message));
+  if (lag) { await scr.addInitScript(slow, lag); await ctx2.addInitScript(slow, lag); }
+  if (process.env.IOS) await ctx2.addInitScript(() => { window.__ios = 1; }); const errs = []; scr.on('pageerror', e => errs.push('screen: ' + e.message));
   await scr.goto('http://localhost:5173/?sig=127.0.0.1:9000&fx=0&debug'); await scr.waitForTimeout(1500);
   await scr.evaluate(() => document.querySelector('.ctlcard[data-ctl="phone"]').click()); await scr.waitForFunction(() => window.__pad && window.__pad.phone.url, null, { timeout: 15000, polling: 100 });
   const url = await scr.evaluate(() => window.__pad.phone.url);
@@ -20,7 +21,8 @@ const { chromium } = require('playwright');
   const W = 2 * Math.PI * 0.8;
   const padT0 = await pad.evaluate(W => { const t0 = performance.timeOrigin + performance.now();
     setInterval(() => { const t = (performance.timeOrigin + performance.now() - t0) / 1000, g = 20 * Math.sin(W * t), gr = 20 * W * Math.cos(W * t);   // deg/s, as phones report it
-      window.dispatchEvent(new DeviceMotionEvent('devicemotion', { rotationRate: { alpha: 0, beta: 0, gamma: gr } }));
+      // IOS=1: iPhones report the roll rate as 'beta' (x, y, z order) instead of the standard 'gamma'
+      window.dispatchEvent(new DeviceMotionEvent('devicemotion', { rotationRate: window.__ios ? { alpha: 0, beta: gr, gamma: 3 * Math.sin(t * 9) } : { alpha: 0, beta: 0, gamma: gr } }));
       window.dispatchEvent(new DeviceOrientationEvent('deviceorientation', { alpha: 0, beta: 0, gamma: g })); }, 1000 / 60); return t0; }, W);
   await scr.waitForTimeout(3500);
   // sample the screen's estimate of the phone roll "right now" (latest reading carried forward by its age, link.js)
