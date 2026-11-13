@@ -31,6 +31,7 @@ void main(){
   c=mix(c,c*vec3(1.10,1.02,0.90),smoothstep(0.5,1.0,l)*0.6);
   c=mix(vec3(l),c,1.22);                       // richer colour
   c=c*c*(3.0-2.0*c)*0.42+c*0.58;                // gentle contrast curve
+  {float hl=dot(c,vec3(0.299,0.587,0.114));c*=1.0-0.28*smoothstep(0.62,1.0,hl);}   // soften the brightest areas (the sun)
   vec2 d=vUv-0.5;float vig=smoothstep(0.92,0.25,length(d*vec2(1.0,0.82)));
   c*=mix(0.62,1.0,vig);
   c+=vec3(1.0,0.75,0.5)*uSpeed*0.05*(1.0-vig);  // edges warm up at speed
@@ -45,7 +46,7 @@ export function createPost(renderer, scene, camera, { lite = false } = {}) {
   if (renderer.capabilities.isWebGL2 && !lite) { target = new THREE.WebGLMultisampleRenderTarget(size.x, size.y, { format: THREE.RGBAFormat }); target.samples = 4; }
   const composer = target ? new EffectComposer(renderer, target) : new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
-  const bloom = new UnrealBloomPass(new THREE.Vector2(size.x / 2, size.y / 2), lite ? 0.3 : 0.42, 0.85, 0.8);
+  const bloom = new UnrealBloomPass(new THREE.Vector2(size.x / 2, size.y / 2), lite ? 0.26 : 0.34, 0.85, 0.86);   // strength, radius, threshold: less sun bloom
   composer.addPass(bloom);
   const paint = new ShaderPass(PaintShader); composer.addPass(paint);
   const api = {

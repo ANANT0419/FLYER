@@ -51,6 +51,7 @@ Rooms run on the same Supabase Realtime project as the phone relay (`src/relay-c
 | `src/game.js` | World, flight physics, tracks, tutorial, HUD, game flow |
 | `src/hand.js` | Camera hand tracking (MediaPipe Hand Landmarker, runs on the device) |
 | `src/link.js`, `src/pad.js` | Phone glider: the big-screen side and the phone controller page (direct WebRTC link, introduced through the public PeerJS server) |
+| `src/recorder.js` | Records each flight and sends it to the game's Supabase table `flight_logs` for review (switch on the start screen) |
 | `src/predict.js` | Cancels the phone delay: gyro rate, clock sync, drawing where the phone is now |
 | `test/` | Simulations and browser tests (see the top of each file for how to run it) |
 | `src/race.js` | Race rooms: who is in the room, host, start signal, positions of other racers, finish times |
