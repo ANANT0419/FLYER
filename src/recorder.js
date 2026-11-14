@@ -8,7 +8,7 @@ const load = (k, d) => { try { const v = JSON.parse(localStorage.getItem('flyer.
 export const recorder = { on: load('record', true), last: '' };
 export function setRecording(on) { recorder.on = !!on; try { localStorage.setItem('flyer.record', JSON.stringify(recorder.on)); } catch (_) {} }
 
-const KEYS = ['t', 's', 'off', 'lk', 'ol', 'pi', 'ti', 'np', 'nt', 'hy', 'hp', 'p', 'r', 'yw', 'v', 'y', 'gy', 'mdt', 'pp', 'pr', 'fp', 'fr', 'pl', 'ms'];
+const KEYS = ['t', 's', 'off', 'lk', 'hl', 'cl', 'ol', 'pi', 'ti', 'np', 'nt', 'hy', 'hp', 'p', 'r', 'yw', 'v', 'y', 'gy', 'mdt', 'pp', 'pr', 'fp', 'fr', 'pl', 'ms'];
 const MAX = 6000;   // 5 minutes at 20 a second
 let cur = null, lastSample = 0, maxDt = 0, frames = 0, frameSum = 0;
 

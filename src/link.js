@@ -20,6 +20,7 @@ export function peerOptions() {   // ?sig=host:port points at a different introd
 export const padId = code => 'flyer-pad-' + String(code).toLowerCase();
 
 export const phone = {
+  stalls: [], hold: false,
   status: 'off',        // off | starting | waiting | connected | error
   error: '', code: '', url: '',
   live: false,          // tilt data is arriving right now
@@ -53,13 +54,20 @@ function onData(d, viaRelay) {
       if (lastMsg && gap < 0.35) { st.vp += ((p - st.p) / gap - st.vp) * 0.5; st.vr += ((r - st.r) / gap - st.vr) * 0.5; } else st.vp = st.vr = 0;
       st.at = t - (phone.ms || 15);
     }
+    // a silence in the middle of a flight (the recordings show 1-3 s ones, twice followed by a crash): note it; the phone's
+    // next health note says whether its own page or sensor paused, otherwise it was the network between the two
+    if (lastMsg && t - lastMsg > 500 && t - lastMsg < 20000) { stallMs = t - lastMsg; stallAt = t; }
     st.p = p; st.r = r; phone.pitch = p; phone.roll = r; lastMsg = t; phone.via = directOpen() ? 'direct' : 'relay';
   }
-  else if (d.q) { const now = performance.now(), rtt = now - d.q; if (rtt >= 0 && rtt < 5000) phone.ms = phone.ms ? phone.ms * 0.7 + rtt / 2 * 0.3 : rtt / 2; if (d.t != null) clockPong(clock, d.q, +d.t, now); pings++; }
-  else if (d.st) { phone.hz = +d.st[0] || 0; phone.gyro = ['off', 'on', 'learning'][+d.st[1]] || 'off'; }
+  // delay shown = the middle of the last five pings: one late answer is not 'a slow link'
+  else if (d.q) { const now = performance.now(), rtt = now - d.q; if (rtt >= 0 && rtt < 5000) { rtts.push(rtt / 2); if (rtts.length > 5) rtts.shift(); phone.ms = [...rtts].sort((a, b) => a - b)[rtts.length >> 1]; } if (d.t != null) clockPong(clock, d.q, +d.t, now); pings++; }
+  else if (d.st) { phone.hz = +d.st[0] || 0; phone.gyro = ['off', 'on', 'learning'][+d.st[1]] || 'off';
+    if (stallMs && performance.now() - stallAt < 4000) { const tg = +d.st[2] || 0, sg = +d.st[3] || 0, need = stallMs * 0.5;
+      phone.stalls.push([Math.round(stallMs), d.st.length < 4 ? 'cause unknown (old phone page)' : tg > need ? 'the phone’s browser paused' : sg > need ? 'the phone’s tilt sensor paused' : 'the network between phone and screen stalled']); stallMs = 0; } }
   else if (d.h && relay) relay.send({ k: 1 });
   else if (d.b) for (const cb of boostCbs) { try { cb(); } catch (_) {} }
 }
+let stallMs = 0, stallAt = 0; const rtts = [];
 let peer = null, conn = null, lastMsg = 0, sp = 0, sr = 0, lastT = 0, lastPing = 0, lastPhoneT = -1e12, pings = 0;
 const st = { p: 0, r: 0, vp: 0, vr: 0, at: 0 }, clock = makeClock(), eP = {}, eR = {};
 const boostCbs = [];
@@ -107,6 +115,9 @@ export function stopPhone() { keepCode(''); if (answerer) answerer.close(); answ
 export function updatePhone(now) {
   const dt = Math.min(0.1, lastT ? (now - lastT) / 1000 : 0.016); lastT = now;
   phone.live = phone.status === 'connected' && now - lastMsg < 600;
+  // after a silence the tilt eases to level over about half a second and stays in charge (it used to snap to level in
+  // one frame and hand over to the keyboard), so a short stall is a soft sag, and the return is a soft catch-up
+  phone.hold = phone.status === 'connected' && now - lastMsg < 3000;
   // ping often at first (to learn how the two clocks differ), then now and then to keep the delay figure fresh
   if (phone.status === 'connected' && now - lastPing > (pings < 8 ? 250 : phone.via === 'relay' ? 3000 : 1000)) { lastPing = now; toPhone({ p: now }); }
   // Draw where the phone is now, not where it was: carry the last reading forward by its age plus the time until this
@@ -117,9 +128,9 @@ export function updatePhone(now) {
   const [tp, tr] = phone.live ? predict(st, now, 20 + 1000 / 60 + 1000 / 70, relay ? 260 : gy ? 160 : 90, lead) : [0, 0];
   phone.lead = phone.live ? Math.round(Math.min(relay ? 260 : 160, now - st.at + 50)) : 0;
   if (phone.live) { sp = euroStep(eP, tp, st.vp, dt); sr = euroStep(eR, tr, st.vr, dt); }   // steady when still, quick when turning
-  else { const g = 1 - Math.exp(-dt * 6); sp += (0 - sp) * g; sr += (0 - sr) * g; eP.v = sp; eR.v = sr; }   // ease to level if the messages stop
+  else { const g = 1 - Math.exp(-dt * 4); sp += (0 - sp) * g; sr += (0 - sr) * g; eP.v = sp; eR.v = sr; }   // ease to level if the messages stop
   const p = shape(sp * phone.sens, PITCH_DEAD, PITCH_FULL), t = shape(-sr * phone.sens, ROLL_DEAD, ROLL_FULL);   // t + = turn left
-  phone.L = phone.live ? clamp(p + t, -1, 1) : 0; phone.R = phone.live ? clamp(p - t, -1, 1) : 0;
+  phone.L = phone.hold ? clamp(p + t, -1, 1) : 0; phone.R = phone.hold ? clamp(p - t, -1, 1) : 0;
   phone.sp = sp; phone.sr = sr;
 }
 // ?debug exposes the link's inner state for test/phone-e2e.cjs

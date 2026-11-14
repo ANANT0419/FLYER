@@ -47,7 +47,7 @@ export function startPad(code) {
     // flat on the palm: beta is nose up/down, gamma is the roll. Past ~60 degrees the two start to blend, which is beyond any flying tilt.
     const p = Math.max(-80, Math.min(80, beta - b0)), r = Math.max(-80, Math.min(80, gamma - g0));
     $('padWing').style.transform = `translateY(${(-p * 1.6).toFixed(1)}px) rotate(${r.toFixed(1)}deg)`;
-    curP = p; curR = r; curT = performance.now();
+    { const n = performance.now(); if (curT) sensGap = Math.max(sensGap, n - curT); curP = p; curR = r; curT = n; }
     curV = rateStep(rate, curT, [p, r], gyro); nRead++;   // how fast it is tilting, so the big screen can predict past the delay
     sendTilt(false);   // send the moment the sensor reports, rather than waiting for the next beat
   }
@@ -62,10 +62,12 @@ export function startPad(code) {
     if (direct) dsend(m); else if (relayUp) relay.send(m);
   }
   // and a steady beat, so the big screen knows the phone is there even when it is held perfectly still
-  setInterval(() => sendTilt(true), 50);
+  // also watch for our own hiccups: a late beat means this page was paused, a late reading means the sensor was
+  let beatAt = 0, beatGap = 0, sensGap = 0, prevGaps = [0, 0];
+  setInterval(() => { const n = performance.now(); if (beatAt) beatGap = Math.max(beatGap, n - beatAt - 50); beatAt = n; sendTilt(true); }, 50);
   // once a second, a health note for the big screen's phone check: readings per second and whether the gyroscope is used
   let nRead = 0;
-  setInterval(() => { if (up()) send({ st: [nRead, rate.ok[0] || rate.ok[1] ? 1 : gyro ? 2 : 0] }); nRead = 0; }, 1000);
+  setInterval(() => { if (up()) send({ st: [nRead, rate.ok[0] || rate.ok[1] ? 1 : gyro ? 2 : 0, Math.round(Math.max(beatGap, prevGaps[0])), Math.round(Math.max(sensGap, prevGaps[1]))] }); nRead = 0; prevGaps = [beatGap, sensGap]; beatGap = sensGap = 0; }, 1000);
   const echo = d => { if (d && d.p) send({ q: d.p, t: Math.round(performance.now() * 10) / 10 }); };   // our clock too, so the screen can date each reading
   function connect(quiet) {
     if (!quiet || !relayUp) stat('Connecting…');

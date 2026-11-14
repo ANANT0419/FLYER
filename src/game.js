@@ -516,9 +516,10 @@ vec3 col=mix(vec3(1.0,0.9,0.72),vec3(0.8,0.97,1.0),dash);gl_FragColor=vec4(col*a
 // Your tilt always drives the glider 1:1 (bank, pitch, turn rate): the line never replaces it. The help acts only on
 // where you are: a gentle heading nudge and a sideways/up-down pull back onto the line, like lane-keeping in a car.
 // win = how far off (in full-tilt units) your tilt can be and still count as right enough; lean = when a bend or dip
-// clearly needs a tilt, the share of it you must give, the right way round; yawK/pitchK/pull = strength of the nudges.
-const GUIDE={easy:{win:0.5,lean:0.3,yawK:2.2,pitchK:0.07,pull:2.6,pullMax:8,name:'Easy'},normal:{win:0.3,lean:0.45,yawK:1.2,pitchK:0.04,pull:1.4,pullMax:5,name:'Normal'},pro:{win:0.1,lean:0.7,yawK:0.15,pitchK:0.008,pull:0.25,pullMax:1,name:'Pro'},
-  off:{win:1e-4,lean:1,yawK:0,pitchK:0,pull:0,pullMax:0,name:'Off'}};   // 'off' is only for tests (test/guide-response.cjs)
+// clearly needs a tilt, the share of it you must give, the right way round; yawK/pull = strength of the heading nudge and sideways drift; pitchT = seconds the height nudge takes to close a gap;
+// flare = how much a too-fast arrival is rounded off (up to flareMax radians); close = help strength while flying back.
+const GUIDE={easy:{win:0.5,lean:0.3,yawK:2.2,pitchT:0.16,flare:1,flareMax:0.45,close:0.8,pull:2.6,pullMax:8,name:'Easy'},normal:{win:0.3,lean:0.45,yawK:1.2,pitchT:0.3,flare:0.7,flareMax:0.3,close:0.7,pull:1.4,pullMax:5,name:'Normal'},pro:{win:0.1,lean:0.7,yawK:0.15,pitchT:3,flare:0.15,flareMax:0.08,close:0.5,pull:0.25,pullMax:1,name:'Pro'},
+  off:{win:1e-4,lean:1,yawK:0,pitchT:1e6,flare:0,flareMax:0,close:0,pull:0,pullMax:0,name:'Off'}};   // 'off' is only for tests (test/guide-response.cjs)
 const LINE_SPEED=0.15;                            // on the line you fly 15% faster
 let gateDh=[];                                    // race: how far each gate sits above the current's line, so the route threads it
 function routePoint(s,out){streamAt(s);let h=SH;
@@ -860,7 +861,7 @@ function readInput(dt){
   input.kL=ease(input.kL,clamp(kl,-1,1),5);input.kR=ease(input.kR,clamp(kr,-1,1),5);
   if(mouse){const p=clamp((mouse.y-mouse.y0)/(window.innerHeight*0.2),-1,1),t=clamp(-(mouse.x-mouse.x0)/(window.innerWidth*0.15),-1,1);input.mL=clamp(p+t,-1,1);input.mR=clamp(p-t,-1,1);}
   else{input.mL=ease(input.mL,0,5);input.mR=ease(input.mR,0,5);}
-  if(settings.control==='phone'&&phone.status!=='off'){remote.active=phone.live;remote.L=phone.L;remote.R=phone.R;remote.tl=remote.tr=remote.active;if(remote.active&&keysDown.size===0&&!mouse&&touches.size===0)noteInput('remote');}
+  if(settings.control==='phone'&&phone.status!=='off'){remote.active=phone.live||phone.hold;remote.L=phone.L;remote.R=phone.R;remote.tl=remote.tr=remote.active;if(remote.active&&keysDown.size===0&&!mouse&&touches.size===0)noteInput('remote');}
   else if(hand.enabled){remote.active=hand.tracking&&hand.calibrated;remote.L=hand.L;remote.R=hand.R;remote.tl=remote.tr=remote.active;if(remote.active&&settings.control==='camera'&&keysDown.size===0&&!mouse&&touches.size===0)noteInput('remote');}else remote.active=false;
   const rRate=settings.control==='phone'?70:settings.control==='camera'?40:20;input.rL=ease(input.rL,remote.active?remote.L:0,rRate);input.rR=ease(input.rR,remote.active?remote.R:0,rRate);
   const s=settings.sens;return {L:clamp((input.tL+input.kL+input.mL+input.rL)*s,-1,1),R:clamp((input.tR+input.kR+input.mR+input.rR)*s,-1,1)};
@@ -877,7 +878,7 @@ function drawThumbs(){
 
 /* ================= game state ================= */
 const G={state:'menu',mode:'main',pos:new THREE.Vector3(),yaw:0,pitch:0,roll:0,speed:70,s:0,d:0,idx:0,yawRate:0,pitchRate:0,
-  score:0,combo:0,comboT:0,gems:0,rings:0,crashes:0,boost:0.34,boostT:0,crashT:0,invuln:0,time:0,skim:false,inStream:false,lock:0,onLine:0,flow:1,lineOff:0,helpYaw:0,helpPitch:0,raceLvl:'',menuS:0,
+  score:0,combo:0,comboT:0,gems:0,rings:0,crashes:0,boost:0.34,boostT:0,crashT:0,invuln:0,time:0,skim:false,inStream:false,lock:0,onLine:0,flow:1,lineOff:0,helpYaw:0,helpPitch:0,help:0,ign:0,offV:0,eV:0,offP:NaN,eP:0,pullV:new THREE.Vector3(),raceLvl:'',menuS:0,
   armL:0,armR:0,pitchIn:0,turnIn:0,bumpT:0,gust:0,oobT:0,rescueT:0,inThermal:false,progS:0,progT:0};
 const dir=new THREE.Vector3();
 const trackYaw=()=>Math.atan2(-_t.x,-_t.z);
@@ -923,44 +924,74 @@ const _gq=new THREE.Vector3(),_gr=new THREE.Vector3();
 function guideLevel(){return RACE&&!G.solo&&room.status==='in'&&GUIDE[G.raceLvl]?G.raceLvl:settings.guide;}
 function guide(dt){
   const GL=GUIDE[guideLevel()];routePoint(G.s,_gq);G.lineOff=_gq.distanceTo(G.pos);const dyNow=_gq.y-G.pos.y;
+  // how fast you are closing on the line (m/s, + = getting nearer), overall and up/down. A jump (crash reset, start)
+  // is not movement, so it restarts the measurement.
+  {const e=Math.max(dt,1e-3),jump=!(Math.abs(G.lineOff-G.offP)<250*e),k=1-Math.exp(-dt*12);
+   if(jump){G.offV=0;G.eV=0;}else{G.offV+=((G.offP-G.lineOff)/e-G.offV)*k;G.eV+=((dyNow-G.eP)/e-G.eV)*k;}
+   G.offP=G.lineOff;G.eP=dyNow;}
   // what the line needs: aim at a point on it ~1.1 s ahead (pure pursuit). Further ahead = bends ask for your tilt earlier
   // and more gently (owner's recording: a coaster bend went from 'nothing' to 'full tilt' in ~1 s and threw them 100 m off)
   const look=clamp(G.speed*1.1,40,140);routePoint(Math.min(LEN,G.s+look),_gr);
   const dx=_gr.x-G.pos.x,dz=_gr.z-G.pos.z,dy=_gr.y-G.pos.y,hd=Math.hypot(dx,dz)||1;
   const wantYaw=Math.atan2(-dx,-dz),wantPitch=Math.atan2(dy,hd);
-  const needP=clamp((wantPitch+0.1)/0.78,-1,1);   // inputs here are already in game terms (after invert)
+  // inputs here are already in game terms (after invert)
+  const needP=clamp((wantPitch+0.1)/0.78,-1,1);
   const needT=clamp(angDiff(wantYaw,G.yaw)*2*Math.max(G.speed,30)/look/1.6,-1,1);
-  const under=(inp,need)=>Math.abs(need)>0.15&&inp*Math.sign(need)<Math.abs(need)*GL.lean;   // not leaning into it
+  // not leaning into a real bend or dip
+  const under=(inp,need)=>Math.abs(need)>0.15&&inp*Math.sign(need)<Math.abs(need)*GL.lean;
   const miss=Math.max(Math.hypot(G.pitchIn-needP,G.turnIn-needT),under(G.pitchIn,needP)||under(G.turnIn,needT)?GL.win*2:0);
   const near=1-smoothstep(70,140,G.lineOff);
-  // match: off in ~0.25 s when your tilt stops matching (no coasting on an old good tilt). On: at once when you are
-  // already near the line, but faded in over ~0.7 s when you are still far from it, so joining never jumps.
-  // three ways to count as "right enough": (1) your tilt matches what the line needs; (2) you are already on it and
+  // Ways to count as "right enough": (1) your tilt matches what the line needs; (2) you are already on it and
   // pointing along it (being on route is the proof, owner: "if the player is doing right enough control, the glide is
-  // smooth and on route") unless you ignore a real bend or dip; (3) far off, you are steering back toward it the right
-  // way round with a real tilt: then the help joins in partly and brings you in on a gentle curve.
+  // smooth and on route") unless you keep ignoring a real bend or dip (a moment's lapse does not count: the recordings
+  // showed the help blinking off and on twice a second on the coaster); (3) far off, you are steering back toward it
+  // the right way round with a real tilt; (4) you are flying back toward the line, whatever your tilt says. In the
+  // recordings the owner dived straight at the line; the old rule read that as "wrong tilt" (the line ahead needed a
+  // climb by then) and dropped all help just as they arrived, so they shot through it and had to start again.
   const tilt=(1-smoothstep(GL.win,GL.win*2,miss));
-  const ignoring=under(G.pitchIn,needP)||under(G.turnIn,needT);
-  const onRoute=ignoring?0:(1-smoothstep(5,12,G.lineOff))*(1-smoothstep(0.15,0.35,Math.abs(angDiff(wantYaw,G.yaw))));
+  const ignoring=under(G.pitchIn,needP)||under(G.turnIn,needT);G.ign+=((ignoring?1:0)-G.ign)*(1-Math.exp(-dt*(ignoring?3:8)));
+  const onRoute=(1-smoothstep(0.3,0.75,G.ign))*(1-smoothstep(5,12,G.lineOff))*(1-smoothstep(0.15,0.35,Math.abs(angDiff(wantYaw,G.yaw))));
   const nm=Math.hypot(needP,needT),im=Math.hypot(G.pitchIn,G.turnIn),cosv=nm>0.01&&im>0.01?(G.pitchIn*needP+G.turnIn*needT)/(nm*im):0;
   const back=nm>0.45?0.6*smoothstep(0.5,0.85,cosv)*smoothstep(0.15,0.4,im):0;
-  const want=Math.max(tilt,onRoute,back)*near*(G.crashT>0?0:1);
-  G.lock+=(want-G.lock)*(1-Math.exp(-dt*(want>G.lock?10-8.5*smoothstep(4,15,G.lineOff):4)));
+  const closing=GL.close*smoothstep(0.06,0.2,G.offV/Math.max(G.speed,40))*smoothstep(2,8,G.lineOff);
+  const want=Math.max(tilt,onRoute,back,closing)*near*(G.crashT>0?0:1);
+  G.lock+=(want-G.lock)*(1-Math.exp(-dt*(want>G.lock?10-6*smoothstep(4,15,G.lineOff):4)));
   G.onLine=G.lock*(1-smoothstep(6,25,G.lineOff));G.miss=miss;G.needP=needP;G.needT=needT;
+  // The help itself never switches: its strength follows the lock over ~0.25 s, and each nudge is eased, so nothing
+  // the line does to the glider can arrive as a kick (recordings: 14 degrees of extra pitch appeared within 0.1 s).
+  // Tilt controls (phone, camera) show every change of the help at once, so they get the full easing. Keys and mouse
+  // already move the glider with ~0.3 s of weight, which smooths the help by itself; more delay on top made a
+  // keyboard pilot weave in the race canyon (test/full-check.cjs), so they keep the quick response.
+  const soft=G.direct;
+  G.help+=(G.lock-G.help)*(1-Math.exp(-dt*(soft?4.5:14)));
   // the nudges: added on top of your tilt, based on where you are, so every change of tilt still shows in full.
   // From further off they aim at a point on the line further ahead (4 m along per metre off: never steeper than ~14
   // degrees), so you merge in on a natural curve rather than being yanked straight at it.
   const L=clamp(Math.max(look,G.lineOff*4),30,400);routePoint(Math.min(LEN,G.s+L),_gr);
-  const mYaw=Math.atan2(-(_gr.x-G.pos.x),-(_gr.z-G.pos.z));
-  G.helpYaw=G.lock*GL.yawK*clamp(angDiff(mYaw,G.yaw),-0.5,0.5);
-  G.helpPitch=G.lock*clamp(dyNow*GL.pitchK,-0.25,0.25);
+  const mYaw=Math.atan2(-(_gr.x-G.pos.x),-(_gr.z-G.pos.z)),ke=1-Math.exp(-dt*(soft?9:40));
+  // eased, and never changing faster than a calm hand would tilt
+  const ease=(cur,to,maxRate)=>soft?cur+clamp((to-cur)*ke,-maxRate*dt,maxRate*dt):cur+(to-cur)*ke;
+  G.helpYaw=ease(G.helpYaw,G.help*GL.yawK*clamp(angDiff(mYaw,G.yaw),-0.5,0.5),1.6);
+  // Up and down: the extra pitch is what closes the height gap in about pitchT seconds at your speed, and it fades
+  // out when you are already closing that fast yourself (it used to pile a full extra dive on top of your own). When
+  // you come in faster than the gap allows, it rounds your arrival off instead (the flare), so you level out onto the
+  // line rather than through it.
+  {const v=Math.max(G.speed,40),ae=Math.abs(dyNow),sg=Math.sign(dyNow)||1,cV=-sg*G.eV;
+   const gentle=Math.max(Math.min(ae/GL.pitchT,0.25*v),3);
+   const pos=sg*Math.min(ae/(GL.pitchT*v),0.25)*clamp(1-cV/gentle,0,1);
+   const flare=-sg*Math.min(GL.flare*Math.max(0,cV-ae/0.7-3)/v,GL.flareMax);
+   G.helpPitch=ease(G.helpPitch,G.help*(pos+flare),0.9);}
 }
 // and draws you onto it sideways and up/down, never along it
+const _pv=new THREE.Vector3();
 function linePull(dt){
-  // never faster than pullMax metres a second, so from further off it is a gentle drift in, never a yank
-  const GL=GUIDE[guideLevel()],k=1-Math.exp(-dt*GL.pull*G.lock);if(k<=1e-4)return;
+  // never faster than pullMax metres a second, so from further off it is a gentle drift in, never a yank; and the
+  // drift itself builds up and dies away over ~0.1 s (it used to flip direction in one frame as you crossed the line)
+  const GL=GUIDE[guideLevel()];
   locate();routePoint(G.s,_gq);frame(G.s);_gq.sub(G.pos);const along=_gq.dot(_t);_gq.addScaledVector(_t,-along);
-  _gq.y*=0.5;_gq.multiplyScalar(k);const m=_gq.length(),mx=GL.pullMax*G.lock*dt;if(m>mx)_gq.multiplyScalar(mx/m);G.pos.add(_gq);}   // softer up/down, so a climb or dive you make still shows
+  // softer up/down, so a climb or dive you make still shows
+  _gq.y*=0.5;_gq.multiplyScalar(GL.pull*G.help);const m=_gq.length(),mx=GL.pullMax*G.help;if(m>mx)_gq.multiplyScalar(mx/m);
+  _pv.copy(G.pullV).lerp(_gq,1-Math.exp(-dt*(G.direct?10:30)));G.pullV.copy(_pv);G.pos.addScaledVector(G.pullV,dt);}
 
 function update(dt){
   const isTut=G.mode==='tut';G.time+=dt;
@@ -1218,7 +1249,7 @@ for(const b of document.querySelectorAll('.trackcard'))b.onclick=()=>{if(G.state
 window.addEventListener('keydown',e=>{if(e.repeat)return;if(e.key==='v'||e.key==='V'){setView(settings.view==='fp'?'3p':'fp');}});
 syncSettingsUI();updateTutBadge();
 
-function resetRun(){Object.assign(G,{state:'play',score:0,combo:0,comboT:0,gems:0,rings:0,crashes:0,boost:0.34,boostT:0,crashT:0,invuln:1,time:0,speed:72,bumpT:0,armL:0,armR:0,yawRate:0,pitchRate:0,gust:0,oobT:0,rescueT:0,inThermal:false,progS:30,progT:0,lock:0,onLine:0,flow:1,lineOff:0,helpYaw:0,helpPitch:0});thermals.forEach(t=>t.hit=false);$('fadeB').classList.remove('on');
+function resetRun(){Object.assign(G,{state:'play',score:0,combo:0,comboT:0,gems:0,rings:0,crashes:0,boost:0.34,boostT:0,crashT:0,invuln:1,time:0,speed:72,bumpT:0,armL:0,armR:0,yawRate:0,pitchRate:0,gust:0,oobT:0,rescueT:0,inThermal:false,progS:30,progT:0,lock:0,onLine:0,flow:1,lineOff:0,helpYaw:0,helpPitch:0,help:0,ign:0,offV:0,eV:0,offP:NaN});G.pullV.set(0,0,0);thermals.forEach(t=>t.hit=false);$('fadeB').classList.remove('on');
   placeAt(30,48);updateCamera(0,true);startRecording();}
 function goFull(){if(!isTouch)return;try{const el=document.documentElement;if(el.requestFullscreen&&!document.fullscreenElement)el.requestFullscreen().then(()=>{try{screen.orientation.lock('landscape').catch(()=>{});}catch(e){}}).catch(()=>{});}catch(e){}}
 // flight recorder: what the flight was, for the review (recorder.js)
@@ -1380,7 +1411,7 @@ function closePhoneSetup(use){$('phoneSetup').hidden=true;
   syncControlUI();if(RACE&&use&&G.state==='menu')openLobby();}
 $('padDone').onclick=()=>closePhoneSetup(true);$('padCancel').onclick=()=>closePhoneSetup(false);$('padSens').addEventListener('input',e=>setPhoneSens(e.target.value));
 onPhoneBoost(()=>{if(!$('phoneSetup').hidden)pk.Tap=true;if(G.state==='play')tryBoost();});
-let padLostSince=0,padSlowLogged=false;
+let padLostSince=0,padSlowLogged=false,padStalls=0;
 let screenFps=0,padChecked=0;
 // what the phone link looks like right now, in plain words: used on the setup screen and in the issue log
 function phoneCheck(){return (phone.via==='relay'?'relay link (slow)':'direct link')+' · network '+Math.round(phone.ms||0)+' ms · phone sends '+(phone.hz||'?')+' readings/s · gyroscope '+(phone.gyro||'?')+' · screen '+Math.round(screenFps)+' frames/s';}
@@ -1401,6 +1432,7 @@ function phoneHud(now){
   // a phone check in the issue log 8 s into each flight with the phone, so a report says where any delay comes from
   if(settings.control==='phone'&&G.state==='play'&&phone.live&&padChecked>=0){if(!padChecked)padChecked=now;if(now-padChecked>8000){padChecked=-1;logIssue('Phone check',phoneCheck()+'. Slow spots: relay link, network over 40 ms, under 50 readings/s, or under 50 frames/s.');}}
   if(settings.control==='phone'&&G.state==='play'){
+    while(phone.stalls.length){const [ms,why]=phone.stalls.shift();if(G.state==='play'){recEvent('phone stall',ms+' ms: '+why);if(++padStalls<=3)logIssue('Phone glider','The phone went silent for '+(ms/1000).toFixed(1)+' s in flight: '+why+'. The glider eased level and picked your tilt up again.');}}
     if(phone.ms>110&&!padSlowLogged){padSlowLogged=true;logIssue('Phone glider','The phone link is slow (about '+Math.round(phone.ms)+' ms, '+(phone.via==='relay'?'through the relay':'direct')+'). Same Wi‑Fi for both devices makes it quicker.');}
     if(phone.live)padLostSince=0;else{if(!padLostSince)padLostSince=now;if(now-padLostSince>2500){pause();$('pauseNote').textContent='Paused because the phone stopped sending its tilt. Wake the phone and check it still says Connected, then resume.';}}
   }
@@ -1444,7 +1476,7 @@ const QSTEPS=[
   ()=>pixelRatio>0.8&&(pixelRatio=0.8,renderer.setPixelRatio(0.8),resize(),'lowered the resolution further'),
 ];
 // one recorder sample: controls in, what the line asked and added, what the glider did, the phone's raw and filtered tilt
-function recSample(){return {s:G.s,off:G.lineOff,lk:G.lock,ol:G.onLine,pi:G.pitchIn,ti:G.turnIn,np:G.needP,nt:G.needT,hy:G.helpYaw,hp:G.helpPitch,
+function recSample(){return {s:G.s,off:G.lineOff,lk:G.lock,hl:G.help,cl:G.offV,ol:G.onLine,pi:G.pitchIn,ti:G.turnIn,np:G.needP,nt:G.needT,hy:G.helpYaw,hp:G.helpPitch,
   p:G.pitch,r:G.roll,yw:G.yaw,v:G.speed*G.flow,y:G.pos.y-floorY(G.s),gy:G.pos.y-groundAt(G.s,G.d),
   pp:phone.live?phone.pitch:null,pr:phone.live?phone.roll:null,fp:phone.live?phone.sp:null,fr:phone.live?phone.sr:null,pl:phone.status==='connected'?(phone.live?1:0):null,ms:phone.ms||null};}
 // Each step is remembered on this device, so the next page load starts at a level that runs smoothly: a step taken

@@ -39,6 +39,8 @@ const fails = []; const fail = m => { fails.push(m); console.log('  FAIL', m); }
           const w = [q.x / s * ang, q.y / s * ang, q.z / s * ang].map(x => x * 180 / Math.PI); if (wPrev) vs += (w[0] - wPrev[0]) ** 2 + (w[1] - wPrev[1]) ** 2 + (w[2] - wPrev[2]) ** 2; wPrev = w; qPrev = cam.quaternion.clone();
         }
         G.bot = null; const log = document.getElementById('issuePanel').textContent;
+        // if the run stops in the middle of a crash (speed is 0 for that second by design), fly on until it is over before reading the speed
+        for (let i = 0; i < 240 && G.state === 'play' && (G.crashT > 0 || G.rescueT > 0 || G.speed < 1); i++) { g.update(1 / 60); g.updateHUD(); }
         return { end: G.state, s: Math.round(G.s), n, frames, maxAim: maxAim.toFixed(1), maxDist: maxDist.toFixed(1), nan, on: Math.round(on / Math.max(1, frames) * 100), wob: (Math.sqrt(wob / frames) * 180 / Math.PI).toFixed(3), vs: Math.sqrt(vs / frames).toFixed(3), crashes: G.crashes, speedText: document.getElementById('speed').textContent, frameErr: /Frame/.test(log) };
       }, [control, lvl, track === 'race']);
       console.log(`${track.padEnd(7)} ${(control === 'phone' ? 'phone' : 'keys').padEnd(5)} ${lvl.padEnd(6)} camera aim ≤ ${r.maxAim.padStart(4)}°  distance ≤ ${r.maxDist} m  on the line ${String(r.on).padStart(3)}%  glider wobble ${r.wob}  view shake ${r.vs}  crashes ${r.crashes}  speed shown ${r.speedText}  frames ${r.n} state ${r.end} at ${r.s} m`);
