@@ -20,7 +20,7 @@ Wingsuit gliding game (three.js r128 + Vite). Live at https://flyer-aspiring-yog
 - Sun: owner said too bright (round 4). Sky sun terms, rays and glare sprite halved, bloom 0.34/threshold 0.86, and the grade softens the brightest areas (`post.js`).
 - Performance: owner saw fps drops after the terrain work. Far ranges now use per-vertex colours + Lambert (not the per-pixel terrain shader), canyon mesh 81 columns, no crack noise; quality ladder steps down at <50 fps (brushwork, resolution 1.25, 1.0, bloom, 0.8), each step noted in the issue log.
 - Phone pairing code is kept in sessionStorage, so switching to the race canyon (a page reload) keeps the phone; the phone retries by itself.
-- Racing: Razorback Canyon and Halcyon Skyway (`RACE` in game.js, chosen at page load; `?room=CODE` joins a room). Rooms in `src/race.js` on the Supabase project. Owner's choices: room code/link, +3 s per missed gate, a new tight canyon, racers pass through each other. Tested with two tabs against `test/fake-supabase.js`; the owner has since raced friends on the real service and it works.
+- Racing: Razorback Canyon (`RACE` in game.js, chosen at page load; `?room=CODE` joins a room). Rooms in `src/race.js` on the Supabase project. Owner's choices: room code/link, +3 s per missed gate, a new tight canyon, racers pass through each other. Tested with two tabs against `test/fake-supabase.js`; the owner has since raced friends on the real service and it works.
 
 ## Guided line (built; owner's choices, asked in two interactive rounds)
 Owner's words: the path was completely on the player, too hard with tricky controls; "if the player is doing right enough control, the glide is smooth and on route".
@@ -45,21 +45,11 @@ Owner: "once the player is off track and tries to go back, so many sudden moment
 - Recorder: two new columns, `hl` (help strength, the eased lock) and `cl` (closing speed on the line, m/s).
 - Lesson repeated: a `//` comment added in the middle of a line in link.js silently cut off the rest of that line; the page failed to load. Syntax-check (`node --check` on a copy named .mjs) after editing dense lines.
 
-## Halcyon Skyway (the minimalist race track; built round 6, not yet played by the owner)
-Owner's choices (asked): **pastel sky** look; phases **colour flip, pulsing gates, big drop and slalom**; **about 60 seconds**. A second race track next to Razorback Canyon (`SKY` in game.js, track value `sky`, chosen at page load like `RACE`; `RACE` is true for both).
-- `src/skyworld.js`: the shape (`skyShape`: turn and slope per metre, `SKY_PH` = where each phase runs), the centre line (`skyPoints`), four pastel palettes plus a night one, and the whole scenery in 5 draw calls (gradient dome, cloud sea, cloud puffs, slalom pylons, drop hoops). The canyon scenery is still built at load (shared code) and then removed from the scene for `SKY` (`SCENERY0`); pillars, arches and thermals are emptied. If load time matters later, skip building it.
-- Phases: 0-1.5 km wide lazy curves; 1.5-3.6 km rolling waves with **breathing gates** (`gateR`: radius 6-11 m on each gate's own beat, driven by `G.time`); a lip, then the **big drop** (3.85-4.55 km, ~430 m down through hoops, the world turns to night and back); 4.9-6.9 km **slalom** round pylons of light (pass-through, no collision); 7.0-7.8 km climb; finish at 8.5 km. **Colour flip**: every third gate you fly through moves the world to the next palette (`skyWorld.setPalette`).
-- No ground: the cloud sea (`SKY_FLOOR`) counts as the floor, touching it is a normal crash. The track is nearly level, so a constant tailwind (`acc+=4`) replaces the canyon's descent. Gates are violet, the next one hot pink (white/gold vanish on a pale sky). `post.brightWorld()` gives the painterly filter a lighter hand (the canyon settings turned the pastel world grey).
-- Rooms: sky rooms use channel `flyer-race-sky-CODE` (`raceCfg.tag`) and invite links carry `&trk=sky`, so canyon and sky racers cannot land in one room. Not tested with two browsers on the sky track (the room code path is otherwise unchanged).
-- Sim (`node test/guide-sim.cjs sky`): good pilot 56-57 s, 0 gates missed on Easy; rough pilot Easy 97 % on the line, 5 gates missed (keyboard-style; phone-style rough pilot misses 1-2). In full-check.
-- **About the lag the owner feels in multiplayer:** all 30 recorded race flights ran at a steady 60 fps on the owner's Mac with no slow frames, so the scenery was not slowing their own screen. More likely: the other racers' ghosts (positions arrive 4 times a second and are dead-reckoned), a friend's slower device, or the phone stalls. Ask what exactly lags (own glider, the others, or the picture) after they race the Skyway.
-- Ask the owner: is the slalom too hard/easy (`0.0036` in `skyShape`), the drop long enough, the colour flips too frequent (every 3rd gate), the breathing too mild (0.3 in `gateR`)?
-
 ## Before handing over
 Run `node test/full-check.cjs` (and the other tests) after any change. Never put a `//` comment in the middle of a minified line: everything after it on that line stops running.
 
 ## Queue
-0. Owner playtest of round 6: the smoother rejoin, phone stalls (read the `phone stall` events in the new recordings first), and Halcyon Skyway with friends (see its section for what to ask).
+0. **Race track (owner round 6, still open; needs the owner's answers first):** multiplayer works with friends; the owner feels lag in multiplayer and thinks it is the scenery. Wants a **minimalistic, aesthetic, fun race track with "mind-titillating" phases** (light scenery so it runs smoothly). The real design choices (look/style, what the phases are, length) were put to the owner at the end of the round-6 session: build from their answers. Note from the recordings: every race flight ran at a steady 60 fps on the owner's Mac with no slow frames, so the lag they feel is more likely the other racers' ghosts (positions 4/s, dead-reckoned) or the phone stalls below than the scenery; check before promising that lighter scenery fixes it.
 1. Owner playtest: guided line levels (feel of window/speed), phone delay with prediction, open-palm camera mode.
 2. A live tuning panel for camera and phone control (smoothing, dead zone, reach, curve).
 3. Visuals: trees and meadows, water, pilot. Maybe a race leaderboard that persists.

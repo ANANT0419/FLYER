@@ -2,12 +2,11 @@
 import * as THREE from 'three';
 import {hand,enableHand,disableHand,updateHand,onFist,attachCanvas,requestCalibration,setCamMode,beginRangeLearning,commitRangeLearning,resetHandRange,setHandSens} from './hand.js';
 import {createPost} from './post.js';
-import {skyPoints,buildSkyWorld,SKY_PH,SKY_FLOOR} from './skyworld.js';
 import {phone,hostPhone,stopPhone,updatePhone,onPhoneBoost,phoneBuzz,setPhoneSens,phoneWasPaired} from './link.js';
 import QRCode from 'qrcode';
 import {rtStats} from './rt.js';
 import {recorder,setRecording,recStart,recFrame,recEvent,recEnd} from './recorder.js';
-import {room,joinRoom,leaveRoom,setMyName,setMyLevel,startRace,sendState,sendFinish,onRaceStart,onRoomChange,ghostPose,newRoomCode,cleanCode,raceCfg} from './race.js';
+import {room,joinRoom,leaveRoom,setMyName,setMyLevel,startRace,sendState,sendFinish,onRaceStart,onRoomChange,ghostPose,newRoomCode,cleanCode} from './race.js';
 (function(){
 "use strict";
 /* ================= issue log ================= */
@@ -42,9 +41,8 @@ if(typeof THREE==='undefined'){logIssue('Load','The 3D engine (three.js) did not
 const store={get(k,d){try{const v=localStorage.getItem('flyer.'+k);return v==null?d:JSON.parse(v)}catch(e){return d}},
              set(k,v){try{localStorage.setItem('flyer.'+k,JSON.stringify(v))}catch(e){}}};
 const hot=window.claude&&window.claude.hot;
-const ROOM_PARAM=new URLSearchParams(location.search).get('room');if(ROOM_PARAM)store.set('track',new URLSearchParams(location.search).get('trk')==='sky'?'sky':'race');
-// the race tracks are different worlds, so they are chosen when the page loads. SKY = Halcyon Skyway (skyworld.js)
-const SKY=store.get('track','gorge')==='sky',RACE=SKY||store.get('track','gorge')==='race';
+const ROOM_PARAM=new URLSearchParams(location.search).get('room');if(ROOM_PARAM)store.set('track','race');
+const RACE=store.get('track','gorge')==='race';   // the race canyon is a different gorge, so it is chosen when the page loads
 const WALL_D=RACE?58:92;                           // where the canyon walls start, metres from the middle
 const bestKey=()=>TRACK==='coaster'?'best.coaster':'best';let best=store.get('best',0);
 const isTouch=!!(window.matchMedia&&matchMedia('(pointer:coarse)').matches);let lastInput=isTouch?'touch':'keys';
@@ -94,8 +92,7 @@ function cloudTex(){const c=document.createElement('canvas');c.width=256;c.heigh
 
 /* ================= track ================= */
 const cps=[];
-if(SKY)cps.push(...skyPoints());
-else if(RACE){const fx=i=>Math.sin(i*1.25)*95+Math.sin(i*0.55+2)*60;   // tighter, twistier, steeper than the classic gorge
+if(RACE){const fx=i=>Math.sin(i*1.25)*95+Math.sin(i*0.55+2)*60;   // tighter, twistier, steeper than the classic gorge
   for(let i=0;i<16;i++)cps.push(new THREE.Vector3(fx(i)-fx(0),660-i*44+Math.sin(i*1.9)*14,-i*290));}
 else for(let i=0;i<17;i++){const z=-i*420;const x=i<1?0:Math.sin(i*0.85)*165+Math.sin(i*0.31+1)*105-Math.sin(1)*105;const y=660-i*40+Math.sin(i*1.7)*16;cps.push(new THREE.Vector3(x,y,z));}
 const curve=new THREE.CatmullRomCurve3(cps,false,'catmullrom',0.5);
@@ -113,7 +110,7 @@ function vn(x,y){const xi=Math.floor(x),yi=Math.floor(y),xf=x-xi,yf=y-yi,u=xf*xf
 // ridged noise: sharp crests and creased valleys, the shape of real mountain ridges
 function ridged(x,y,oct){let sum=0,amp=0.5,f=1,w=1,norm=0;for(let o=0;o<oct;o++){let n=1-Math.abs(vn(x*f,y*f)*2-1);n*=n;n*=w;w=clamp(n*1.6,0,1);sum+=n*amp;norm+=amp;amp*=0.5;f*=2.03;}return sum/norm;}
 function nz(s,d){return Math.sin(s*0.011+d*0.017)*0.5+Math.sin(s*0.027-d*0.031+1.7)*0.3+Math.sin(s*0.061+d*0.05+4.1)*0.2;}
-function relH(s,d){if(SKY)return -1e3;const ad=Math.abs(d),n=nz(s,d);let h=ad*0.05+n*2.4+Math.sin(s*0.09+d*0.13)*0.6;if(ad<26){const t=ad/26;h-=7*(1-t*t);}
+function relH(s,d){const ad=Math.abs(d),n=nz(s,d);let h=ad*0.05+n*2.4+Math.sin(s*0.09+d*0.13)*0.6;if(ad<26){const t=ad/26;h-=7*(1-t*t);}
   if(ad>WALL_D){const w=(ad-WALL_D)/150,side=d>0?1:-1;
     // buttresses and gullies running down the walls, crags on top; each wall has its own pattern
     const rg=ridged(s*0.0065+side*31.7,ad*0.006,4),cr=vn(s*0.045+side*7.3,ad*0.05);
@@ -122,13 +119,12 @@ function relH(s,d){if(SKY)return -1e3;const ad=Math.abs(d),n=nz(s,d);let h=ad*0.
     hw+=Math.sin(s*0.05+d*0.08)*6*w+Math.sin(s*0.21+d*0.17)*2.5*w;
     const st=17+6*rg,q=Math.floor(hw/st)*st,f=(hw-q)/st;hw=hw*0.5+(q+st*f*f*f*f)*0.5;   // ledges: rock strata breaking into steps
     h+=hw;}return h;}
-function groundAt(s,d){if(SKY)return SKY_FLOOR;const h=relH(s,d);return floorY(s)+(Math.abs(d)<23?Math.max(h,-3.0):h);}
+function groundAt(s,d){const h=relH(s,d);return floorY(s)+(Math.abs(d)<23?Math.max(h,-3.0):h);}
 function worldAt(s,d,h,out){frame(s);out.copy(_c).addScaledVector(_r,d);out.y=floorY(s)+h;return out;}
 
 /* ---- the wind current: the ideal line ---- */
 const KS=300,keys=[];
-if(SKY){for(let i=0;i*KS<=LEN+KS*3;i++)keys.push({d:0,h:60});}
-else if(RACE){const kr=mulberry(5150);for(let i=0;i*KS<=LEN+KS*3;i++){if(i<2){keys.push({d:0,h:40});continue;}keys.push({d:(kr()*2-1)*30,h:kr()<0.3?12+kr()*6:20+kr()*30});}}
+if(RACE){const kr=mulberry(5150);for(let i=0;i*KS<=LEN+KS*3;i++){if(i<2){keys.push({d:0,h:40});continue;}keys.push({d:(kr()*2-1)*30,h:kr()<0.3?12+kr()*6:20+kr()*30});}}
 else for(let i=0;i*KS<=LEN+KS*3;i++){if(i<2){keys.push({d:0,h:42});continue;}keys.push({d:rr(-48,48),h:rnd()<0.18?rr(13,17):rr(28,58)});}
 function cr(p0,p1,p2,p3,t){const t2=t*t,t3=t2*t;return 0.5*(2*p1+(-p0+p2)*t+(2*p0-5*p1+4*p2-p3)*t2+(-p0+3*p1-3*p2+p3)*t3);}
 let SD=0,SH=0;
@@ -136,10 +132,10 @@ function streamAt(s){const f=clamp(s,0,LEN)/KS,i=Math.floor(f),t=f-i,k=j=>keys[c
   SD=cr(k(i-1).d,k(i).d,k(i+1).d,k(i+2).d,t);SH=cr(k(i-1).h,k(i).h,k(i+1).h,k(i+2).h,t);if(TRACK==='coaster'){const f2=clamp(s,0,LEN)/KC,j=Math.floor(f2),t2=f2-j,kc=q=>keysC[clamp(q,0,keysC.length-1)];SH=cr(kc(j-1),kc(j),kc(j+1),kc(j+2),t2);}}
 const _sp=new THREE.Vector3(),_sp2=new THREE.Vector3();
 function streamPoint(s,out){streamAt(s);return worldAt(s,SD,SH,out);}
-const ARCH_S=(SKY?[]:RACE?[0.13,0.27,0.41,0.55,0.69,0.83]:[0.27,0.52,0.77]).map(f=>Math.round(LEN*f)),ARCH_R=RACE?60:100;
+const ARCH_S=(RACE?[0.13,0.27,0.41,0.55,0.69,0.83]:[0.27,0.52,0.77]).map(f=>Math.round(LEN*f)),ARCH_R=RACE?60:100;
 if(RACE)for(const a of ARCH_S){const i=Math.round(a/KS);for(const j of [i-1,i,i+1])if(keys[j])keys[j].h=Math.min(keys[j].h,j===i?24:34);}   // the line dips under each arch
-let TRACK=SKY?'sky':RACE?'race':store.get('track','gorge');if(TRACK!=='coaster'&&!RACE)TRACK='gorge';
-const TRACK_NAME={gorge:'Saffron Gorge',coaster:'Skyline Coaster',race:'Razorback Canyon',sky:'Halcyon Skyway'};
+let TRACK=RACE?'race':store.get('track','gorge');if(TRACK!=='coaster'&&TRACK!=='race')TRACK='gorge';
+const TRACK_NAME={gorge:'Saffron Gorge',coaster:'Skyline Coaster',race:'Razorback Canyon'};
 // Skyline Coaster: the current alternates deep valleys and high crests; it dips under the stone arches.
 const KC=230,keysC=[];{const kr=mulberry(7777);let up=false;for(let i=0;i*KC<=LEN+KC*3;i++){if(i<2){keysC.push(46);continue;}up=!up;keysC.push(up?95+kr()*45:12+kr()*10);}
   for(const a of ARCH_S){const i=Math.round(a/KC);for(const j of [i-1,i,i+1])if(keysC[j]!==undefined)keysC[j]=Math.min(keysC[j],j===i?40:60);}}
@@ -159,9 +155,8 @@ vec3 cc=mix(vec3(1.0,0.7,0.58),vec3(0.97,0.8,0.66),pow(sd,2.0));cc=mix(cc,vec3(0
 float st=step(0.9985,hash2(floor(d.xz/(h+0.3)*220.0)))*smoothstep(0.45,0.9,h)*(0.6+0.4*sin(uTime*2.0+d.x*90.0));c+=vec3(st)*0.65;
 gl_FragColor=vec4(c,1.0);}`}));
 sky.renderOrder=-1;scene.add(sky);
-const hemiLight=new THREE.HemisphereLight(0xbfd6e6,0x6b4a3e,0.75);scene.add(hemiLight);
+scene.add(new THREE.HemisphereLight(0xbfd6e6,0x6b4a3e,0.75));
 const sunLight=new THREE.DirectionalLight(0xffd2a1,0.95);scene.add(sunLight);scene.add(sunLight.target);
-const SCENERY0=scene.children.length;   // everything added from here to the end of the scenery belongs to the canyons
 
 /* swaying foliage: amplitude follows the gust field at each plant */
 function swayMat(color,amp,basic){
@@ -503,18 +498,6 @@ function updateButterflies(now,sNow){camera.getWorldDirection(_bfd);
     _bfq.setFromAxisAngle(UP,Math.atan2(-Math.cos(t),Math.sin(t*0.8)*0.8));_bfm.compose(_bfp,_bfq,_bfs);bfMesh.setMatrixAt(i,_bfm);}
   bfMesh.instanceMatrix.needsUpdate=true;}
 
-/* ================= Halcyon Skyway: no canyon, a sky world instead ================= */
-let skyWorld=null;
-if(SKY){
-  // the canyon scenery was built above (its code is shared by every track); take all of it out of the picture, and
-  // out of the flying: no pillars, arches or thermals to meet
-  for(const o of scene.children.slice(SCENERY0))scene.remove(o);scene.remove(sky);
-  pillars.length=0;arches.length=0;thermals.length=0;
-  if(post.brightWorld)post.brightWorld();document.body.classList.add('sky');
-  scene.fog.near=500;scene.fog.far=3400;hemiLight.intensity=0.95;sunLight.intensity=0.55;
-  skyWorld=buildSkyWorld({scene,timeU,worldAt,frame:s=>{frame(s);return {c:_c,r:_r,t:_t};},floorY,LEN,isTouch,rnd:mulberry(2718)});
-}
-
 /* ================= wind current tube ================= */
 const streamMat=new THREE.ShaderMaterial({transparent:true,depthWrite:false,side:THREE.DoubleSide,blending:THREE.AdditiveBlending,
   uniforms:{uTime:timeU,uLen:{value:LEN},uPlayer:{value:new THREE.Vector3()},uOp:{value:1}},
@@ -653,21 +636,17 @@ function buildGates(add){
     const pos=worldAt(gs,d,h,new THREE.Vector3());frame(gs);
     const m=add(new THREE.Mesh(gateGeo,new THREE.MeshLambertMaterial({color:0xeafcff,emissive:0x2a7f94,flatShading:true})));m.userData.ownMat=true;
     m.position.copy(pos);m.lookAt(pos.clone().add(_t));m.frustumCulled=true;
-    const post=add(new THREE.Mesh(gatePostGeo,m.material));const gy=groundAt(gs,d);post.scale.y=Math.max(0.1,pos.y-GATE_R-gy);post.position.set(pos.x,gy+post.scale.y/2,pos.z);if(SKY)post.visible=false;
-    // Skyway, second phase: these gates breathe (6 to 11 m in radius, each on its own beat), so a wide pass has to be timed
-    gates.push({s:gs,d,pos,mesh:m,post,state:0,pulse:SKY&&gs>SKY_PH.pulse[0]&&gs<SKY_PH.pulse[1]?1+gates.length*1.7:0});}
+    const post=add(new THREE.Mesh(gatePostGeo,m.material));const gy=groundAt(gs,d);post.scale.y=Math.max(0.1,pos.y-GATE_R-gy);post.position.set(pos.x,gy+post.scale.y/2,pos.z);
+    gates.push({s:gs,d,pos,mesh:m,post,state:0});}
   streamAt(0);gateDh=gates.map(g=>{streamAt(g.s);return {s:g.s,dh:(g.pos.y-floorY(g.s))-SH};});
 }
-function gateR(g){return g.pulse?GATE_R*(1.02+0.3*Math.sin(G.time*3.6+g.pulse)):GATE_R;}
 function a_inner(a,d){return Math.sqrt(Math.max(0,(a.r-9)*(a.r-9)-d*d))+a.hc;}
-function resetGates(){for(const g of gates){g.state=0;paintGate(g);}G.gi=0;G.gatesHit=0;if(skyWorld)skyWorld.setPalette(0);if(gates[0])paintGate(gates[0],true);}
-// on the pale Skyway the waiting gates are violet and the next one hot pink (white and gold vanish against that sky)
-function paintGate(g,next){const c=g.state===1?0x9be08a:g.state===2?0xff6a5a:next?(SKY?0xff5fa8:0xffd25e):(SKY?0x8f7bff:0xeafcff),e=g.state===1?0x2d6a22:g.state===2?0x7a1c12:next?(SKY?0xb02a70:0x9a6a10):(SKY?0x4a3ac0:0x2a7f94);
-  g.mesh.material.color.set(c);g.mesh.material.emissive.set(e);g.mesh.scale.setScalar(g.pulse&&g.state===0?gateR(g)/GATE_R:next?1.06:1);}
+function resetGates(){for(const g of gates){g.state=0;paintGate(g);}G.gi=0;if(gates[0])paintGate(gates[0],true);}
+function paintGate(g,next){const c=g.state===1?0x9be08a:g.state===2?0xff6a5a:next?0xffd25e:0xeafcff,e=g.state===1?0x2d6a22:g.state===2?0x7a1c12:next?0x9a6a10:0x2a7f94;
+  g.mesh.material.color.set(c);g.mesh.material.emissive.set(e);g.mesh.scale.setScalar(next?1.06:1);}
 function checkGates(){
   while(G.gi<gates.length&&G.s>=gates[G.gi].s){const g=gates[G.gi];
-    if(g.pos.distanceTo(G.pos)<gateR(g)+0.6){g.state=1;recEvent('gate',G.gi);if(skyWorld&&++G.gatesHit%3===0)skyWorld.setPalette(G.gatesHit/3);   // Skyway: every third gate you fly through flips the colours of the world
-      G.boost=Math.min(1,G.boost+0.12);tone(880,0.12,'sine',0.06);setTimeout(()=>tone(1320,0.15,'sine',0.05),70);buzz(10);}
+    if(g.pos.distanceTo(G.pos)<GATE_R+0.6){g.state=1;recEvent('gate',G.gi);G.boost=Math.min(1,G.boost+0.12);tone(880,0.12,'sine',0.06);setTimeout(()=>tone(1320,0.15,'sine',0.05),70);buzz(10);}
     else{g.state=2;G.pen+=GATE_PEN;recEvent('gate missed',G.gi+' by '+g.pos.distanceTo(G.pos).toFixed(1)+' m');toast('Missed gate +'+GATE_PEN+' s','bad');tone(150,0.3,'square',0.05);buzz(60);}
     paintGate(g);G.gi++;if(gates[G.gi])paintGate(gates[G.gi],true);}
 }
@@ -811,7 +790,7 @@ function updateStrands(dt,now){
 /* ================= drifting leaves ================= */
 const LN=isTouch?150:240;
 const leafGeo=new THREE.PlaneGeometry(0.42,0.24);
-const leafMesh=new THREE.InstancedMesh(leafGeo,new THREE.MeshLambertMaterial({side:THREE.DoubleSide,emissive:0x3a2414}),LN);leafMesh.frustumCulled=false;scene.add(leafMesh);if(SKY)leafMesh.visible=false;
+const leafMesh=new THREE.InstancedMesh(leafGeo,new THREE.MeshLambertMaterial({side:THREE.DoubleSide,emissive:0x3a2414}),LN);leafMesh.frustumCulled=false;scene.add(leafMesh);
 const leaves=[];{const lc=['#f0a33a','#e3672f','#f6cf5a','#8fb35a','#c9543a','#f6b8cf','#fbd3e0'],c=new THREE.Color();
   for(let i=0;i<LN;i++){leaves.push({p:new THREE.Vector3(1e6,0,0),rot:new THREE.Euler(rnd()*6,rnd()*6,rnd()*6),spin:new THREE.Vector3(rr(-4,4),rr(-4,4),rr(-4,4)),ph:rnd()*6.28,scale:rr(0.7,1.4)});leafMesh.setColorAt(i,c.set(lc[i%lc.length]));}}
 const _lm=new THREE.Matrix4(),_lq=new THREE.Quaternion(),_ls=new THREE.Vector3(),_cf=new THREE.Vector3(),_cr=new THREE.Vector3(),_wind=new THREE.Vector3(),_rel=new THREE.Vector3();
@@ -1048,7 +1027,6 @@ function update(dt){
   if(G.inStream){acc+=5;G.score+=6*dt;}
   acc-=4*(1-G.lock)*smoothstep(12,40,G.lineOff);   // drifting off the line costs speed
   if(G.boostT>0){G.boostT-=dt;acc+=42;}
-  if(SKY)acc+=4;   // a steady tailwind: the Skyway is nearly level, the canyons get their speed from the descent
   const gu=gustAt(G.pos.x,G.pos.z,timeU.value);G.gust=gu;acc+=gu*3;G.roll+=Math.sin(timeU.value*9)*gu*0.03;
   G.speed=clamp(G.speed+acc*dt,isTut?40:20,G.boostT>0?178:160);
   if(TRACK==='coaster'&&G.inStream)G.speed=Math.max(G.speed,64);
@@ -1216,8 +1194,6 @@ function updateVisuals(dt,now){
   updateLeaves(dt,now,G.state==='menu'?G.menuS:G.s);updateStrands(dt,now);updateMotes(dt);updateFlags(now);updateBirds(now);{const sN=G.state==='menu'?G.menuS:G.s;updateSmoke(dt,now,sN);updateFireflies(now,sN);updateButterflies(now,sN);}for(const c of cloudSprites){c.position.z-=2.2*dt;c.position.x+=Math.sin(now*0.05)*0.6*dt;}glare.position.copy(camera.position).addScaledVector(SUN,1800);
   updateNavigator(dt,now);
   streamMat.uniforms.uPlayer.value.copy(flying?G.pos:camera.position);
-  if(skyWorld)skyWorld.update(dt,camera,flying?G.s:(G.menuS||0),{hemi:hemiLight,sun:sunLight});
-  for(const g of gates)if(g.pulse&&g.state===0)g.mesh.scale.setScalar(gateR(g)/GATE_R);
   sky.position.copy(camera.position);sunLight.position.copy(camera.position).addScaledVector(SUN,400);sunLight.target.position.copy(camera.position);
   if(windGain&&actx){const v=(G.state==='play'&&!muted)?0.025+G.speed*0.00055:0;windGain.gain.setTargetAtTime(v,actx.currentTime,0.15);windFilter.frequency.setTargetAtTime(250+G.speed*9,actx.currentTime,0.2);}
 }
@@ -1268,7 +1244,7 @@ function setView(v){settings.view=v;store.set('view',v);syncSettingsUI();toast(v
 $('viewBtn').onclick=()=>setView(settings.view==='fp'?'3p':'fp');
 $('fppBox').addEventListener('change',e=>{settings.view=e.target.checked?'fp':'3p';store.set('view',settings.view);syncSettingsUI();});
 for(const b of document.querySelectorAll('.trackcard'))b.onclick=()=>{if(G.state!=='menu'||TRACK===b.dataset.track)return;
-  if(b.dataset.track==='race'||b.dataset.track==='sky'||RACE){store.set('track',b.dataset.track);const u=new URL(location.href);u.searchParams.delete('room');location.href=u.toString();return;}   // the race canyon is a different world: reload into it
+  if(b.dataset.track==='race'||RACE){store.set('track',b.dataset.track);const u=new URL(location.href);u.searchParams.delete('room');location.href=u.toString();return;}   // the race canyon is a different world: reload into it
   TRACK=b.dataset.track;store.set('track',TRACK);buildTrack();best=store.get(bestKey(),0);syncSettingsUI();};
 window.addEventListener('keydown',e=>{if(e.repeat)return;if(e.key==='v'||e.key==='V'){setView(settings.view==='fp'?'3p':'fp');}});
 syncSettingsUI();updateTutBadge();
@@ -1308,7 +1284,7 @@ G.pen=0;G.gi=0;G.raceT0=0;G.solo=true;G.final=0;
 const myName=()=>{let n=store.get('name','');if(!n){n='Flyer '+(10+Math.floor(Math.random()*89));store.set('name',n);}return n;};
 function openLobby(){if(needCam())return;G.state='menu';$('hud').hidden=true;$('count').hidden=true;$('rName').value=myName();showOnly('raceLobby');syncLobby();}
 let qrRoom='';
-function roomLink(){const u=new URL(location.href);u.search='';u.hash='';u.searchParams.set('room',room.code);if(SKY)u.searchParams.set('trk','sky');return u.toString();}
+function roomLink(){const u=new URL(location.href);u.search='';u.hash='';u.searchParams.set('room',room.code);return u.toString();}
 function syncLobby(){
   const inRoom=room.status==='in';$('rOut').hidden=inRoom||room.status==='joining';$('rIn').hidden=!inRoom;
   $('rMsg').textContent=room.status==='joining'?'Joining room…':room.status==='error'?room.error:'';
@@ -1385,11 +1361,9 @@ function updateRaceNet(now){
     gh.grp.visible=true;gh.grp.position.set(pose.p[0],pose.p[1],pose.p[2]);eul.set(pose.a[0],pose.a[1],pose.a[2],'YXZ');gh.grp.setRotationFromEuler(eul);}
   for(const [id,gh] of ghosts)if(!seen.has(id)){gh.grp.visible=false;if(!room.players.has(id)){scene.remove(gh.grp);ghosts.delete(id);}}
 }
-if(SKY)raceCfg.tag='sky-';
-if(RACE){$('tutBtn').hidden=true;$('startBtn').querySelector('strong').textContent='Race '+TRACK_NAME[TRACK];
+if(RACE){$('tutBtn').hidden=true;$('startBtn').querySelector('strong').textContent='Race Razorback Canyon';
   $('startBtn').querySelector('span').textContent='Make a room and send friends the link, or practise alone. Fly through every gate: each one missed costs 3 seconds.';
-  document.querySelector('#startScreen .lede').textContent=SKY?'A minute of open sky above a sea of clouds. Breathing gates, one enormous drop, a slalom between pylons of light, and a long climb home. Every third gate you fly through changes the colours of the world.':'A tight, twisting canyon of stone pillars and low arches. No gems: follow the glowing line through every gate to the finish, as fast as you can.';
-  if(SKY)$('raceEyebrow').textContent='Halcyon Skyway · Race';}
+  document.querySelector('#startScreen .lede').textContent='A tight, twisting canyon of stone pillars and low arches. No gems: follow the glowing line through every gate to the finish, as fast as you can.';}
 if(ROOM_PARAM){joinRoom(ROOM_PARAM,myName());openLobby();}   // join straight away, even if the controls need setting up first
 
 /* ================= control picker & camera control ================= */

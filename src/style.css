@@ -265,6 +265,3 @@ h2{margin:0;font-size:clamp(26px,5vw,36px);font-weight:800;letter-spacing:-.03em
 .rplayers li span,.rresults li span{color:var(--muted);font-weight:500}
 .rresults li.me{border-color:rgba(255,210,94,.6)}
 .chip.slow{background:rgba(255,106,90,.85);color:#fff}
-/* Halcyon Skyway: the world is pale, so the flight read-outs get a darker halo to stay readable */
-body.sky #hud{text-shadow:0 1px 3px rgba(40,30,80,.55),0 2px 14px rgba(40,30,80,.45)}
-body.sky .speed,body.sky .speed small{text-shadow:0 1px 3px rgba(40,30,80,.6),0 2px 14px rgba(40,30,80,.5)}

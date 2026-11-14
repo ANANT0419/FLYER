@@ -13,7 +13,7 @@ const fails = []; const fail = m => { fails.push(m); console.log('  FAIL', m); }
     await pg.addInitScript(t => { window.requestAnimationFrame = () => 0; localStorage.setItem('flyer.control', '"simple"'); localStorage.setItem('flyer.track', JSON.stringify(t)); }, track);
     await pg.goto('http://localhost:5173/?debug&fx=0'); await pg.waitForFunction(() => window.__game, null, { polling: 200, timeout: 60000 }); return pg;
   };
-  for (const track of ['gorge', 'coaster', 'race', 'sky']) {
+  for (const track of ['gorge', 'coaster', 'race']) {
     const pg = await open(track);
     for (const control of ['simple', 'phone']) for (const lvl of ['easy', 'normal', 'pro']) {
       const r = await pg.evaluate(([control, lvl, race]) => {
@@ -42,7 +42,7 @@ const fails = []; const fail = m => { fails.push(m); console.log('  FAIL', m); }
         // if the run stops in the middle of a crash (speed is 0 for that second by design), fly on until it is over before reading the speed
         for (let i = 0; i < 240 && G.state === 'play' && (G.crashT > 0 || G.rescueT > 0 || G.speed < 1); i++) { g.update(1 / 60); g.updateHUD(); }
         return { end: G.state, s: Math.round(G.s), n, frames, maxAim: maxAim.toFixed(1), maxDist: maxDist.toFixed(1), nan, on: Math.round(on / Math.max(1, frames) * 100), wob: (Math.sqrt(wob / frames) * 180 / Math.PI).toFixed(3), vs: Math.sqrt(vs / frames).toFixed(3), crashes: G.crashes, speedText: document.getElementById('speed').textContent, frameErr: /Frame/.test(log) };
-      }, [control, lvl, track === 'race' || track === 'sky']);
+      }, [control, lvl, track === 'race']);
       console.log(`${track.padEnd(7)} ${(control === 'phone' ? 'phone' : 'keys').padEnd(5)} ${lvl.padEnd(6)} camera aim ≤ ${r.maxAim.padStart(4)}°  distance ≤ ${r.maxDist} m  on the line ${String(r.on).padStart(3)}%  glider wobble ${r.wob}  view shake ${r.vs}  crashes ${r.crashes}  speed shown ${r.speedText}  frames ${r.n} state ${r.end} at ${r.s} m`);
       if (+r.maxAim > 25) fail(`${track}/${control}/${lvl}: camera points ${r.maxAim}° away from the glider`);
       if (+r.maxDist > 40) fail(`${track}/${control}/${lvl}: camera ${r.maxDist} m from the glider`);
