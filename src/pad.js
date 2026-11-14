@@ -2,7 +2,7 @@
 import { Peer } from 'peerjs';
 import { peerOptions, padId } from './link.js';
 import { joinRelay } from './relay.js';
-import { rtcOffer } from './rtc.js';
+import { rtcOffer , fastChannel, chOpen } from './rtc.js';
 import { makeRate, rateStep } from './predict.js';
 
 export function startPad(code) {
@@ -25,7 +25,8 @@ export function startPad(code) {
   const rate = makeRate();
   // two ways to the screen directly: the PeerJS link (conn) or our own link built through the relay (dch). Either is fast.
   const directOpen = () => (conn && conn.open) || (dch && dch.readyState === 'open');
-  const dsend = d => { try { if (conn && conn.open) conn.send(d); else dch.send(JSON.stringify(d)); } catch (_) {} };
+  let fast = null;
+  const dsend = d => { try { if (chOpen(fast)) fast.send(JSON.stringify(d)); else if (conn && conn.open) conn.send(d); else dch.send(JSON.stringify(d)); } catch (_) {} };
   const up = () => directOpen() || relayUp;
   const send = d => { if (directOpen()) dsend(d); else if (relayUp) relay.send(d); };
   const fromScreen = d => { echo(d); if (d && d.v && navigator.vibrate) try { navigator.vibrate(d.v); } catch (_) {} };
@@ -75,7 +76,7 @@ export function startPad(code) {
     peer = new Peer(peerOptions());
     peer.on('open', () => {
       conn = peer.connect(padId(code), { reliable: false, serialization: 'json' });
-      conn.on('open', () => { linked('direct'); b0 = null; });
+      conn.on('open', () => { linked('direct'); b0 = null; fast = fastChannel(conn.peerConnection, fromScreen); });
       conn.on('data', fromScreen);
       conn.on('close', lost);
     });

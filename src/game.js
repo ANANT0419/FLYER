@@ -878,7 +878,7 @@ function drawThumbs(){
 
 /* ================= game state ================= */
 const G={state:'menu',mode:'main',pos:new THREE.Vector3(),yaw:0,pitch:0,roll:0,speed:70,s:0,d:0,idx:0,yawRate:0,pitchRate:0,
-  score:0,combo:0,comboT:0,gems:0,rings:0,crashes:0,boost:0.34,boostT:0,crashT:0,invuln:0,time:0,skim:false,inStream:false,lock:0,onLine:0,flow:1,lineOff:0,helpYaw:0,helpPitch:0,help:0,ign:0,offV:0,eV:0,offP:NaN,eP:0,pullV:new THREE.Vector3(),raceLvl:'',menuS:0,
+  score:0,combo:0,comboT:0,gems:0,rings:0,crashes:0,boost:0.34,boostT:0,crashT:0,invuln:0,time:0,skim:false,inStream:false,lock:0,onLine:0,flow:1,lineOff:0,helpYaw:0,helpPitch:0,help:0,ign:0,offV:0,eV:0,offP:NaN,eP:0,bridge:0,pullV:new THREE.Vector3(),raceLvl:'',menuS:0,
   armL:0,armR:0,pitchIn:0,turnIn:0,bumpT:0,gust:0,oobT:0,rescueT:0,inThermal:false,progS:0,progT:0};
 const dir=new THREE.Vector3();
 const trackYaw=()=>Math.atan2(-_t.x,-_t.z);
@@ -1004,6 +1004,10 @@ function update(dt){
   const inp=readInput(dt);G.armL+=(inp.L-G.armL)*(1-Math.exp(-dt*kA));G.armR+=(inp.R-G.armR)*(1-Math.exp(-dt*kA));
   let pitchIn=(inp.L+inp.R)/2;if(settings.invert)pitchIn=-pitchIn;let turnIn=(inp.L-inp.R)/2;
   if(G.bot){if(G.bot==='follow'){pitchIn=G.needP||0;turnIn=G.needT||0;}else{pitchIn=G.bot.p;turnIn=G.bot.t;}}   // test hook (?debug): a scripted pilot
+  // The phone has gone silent (Wi-Fi hiccup): for those moments the glider flies what the line needs, blending over
+  // from your last tilt in ~0.25 s and back to your tilt when it returns, so a silence is no longer a lurch or a crash.
+  {const gap=ph&&phone.status==='connected'&&!phone.live&&phone.hold&&!G.bot;G.bridge+=((gap?1:0)-G.bridge)*(1-Math.exp(-dt*(gap?9:7)));
+   if(G.bridge>0.002){pitchIn+=((G.needP||0)-pitchIn)*G.bridge;turnIn+=((G.needT||0)-turnIn)*G.bridge;}}
   G.pitchIn=pitchIn;G.turnIn=turnIn;
   // where is the line?
   streamPoint(G.s,_sp);const streamD=SD;routePoint(G.s,_sp);const streamOff=_sp.distanceTo(G.pos);
@@ -1249,7 +1253,7 @@ for(const b of document.querySelectorAll('.trackcard'))b.onclick=()=>{if(G.state
 window.addEventListener('keydown',e=>{if(e.repeat)return;if(e.key==='v'||e.key==='V'){setView(settings.view==='fp'?'3p':'fp');}});
 syncSettingsUI();updateTutBadge();
 
-function resetRun(){Object.assign(G,{state:'play',score:0,combo:0,comboT:0,gems:0,rings:0,crashes:0,boost:0.34,boostT:0,crashT:0,invuln:1,time:0,speed:72,bumpT:0,armL:0,armR:0,yawRate:0,pitchRate:0,gust:0,oobT:0,rescueT:0,inThermal:false,progS:30,progT:0,lock:0,onLine:0,flow:1,lineOff:0,helpYaw:0,helpPitch:0,help:0,ign:0,offV:0,eV:0,offP:NaN});G.pullV.set(0,0,0);thermals.forEach(t=>t.hit=false);$('fadeB').classList.remove('on');
+function resetRun(){Object.assign(G,{state:'play',score:0,combo:0,comboT:0,gems:0,rings:0,crashes:0,boost:0.34,boostT:0,crashT:0,invuln:1,time:0,speed:72,bumpT:0,armL:0,armR:0,yawRate:0,pitchRate:0,gust:0,oobT:0,rescueT:0,inThermal:false,progS:30,progT:0,lock:0,onLine:0,flow:1,lineOff:0,helpYaw:0,helpPitch:0,help:0,ign:0,offV:0,eV:0,offP:NaN,bridge:0});G.pullV.set(0,0,0);thermals.forEach(t=>t.hit=false);$('fadeB').classList.remove('on');
   placeAt(30,48);updateCamera(0,true);startRecording();}
 function goFull(){if(!isTouch)return;try{const el=document.documentElement;if(el.requestFullscreen&&!document.fullscreenElement)el.requestFullscreen().then(()=>{try{screen.orientation.lock('landscape').catch(()=>{});}catch(e){}}).catch(()=>{});}catch(e){}}
 // flight recorder: what the flight was, for the review (recorder.js)
@@ -1414,7 +1418,7 @@ onPhoneBoost(()=>{if(!$('phoneSetup').hidden)pk.Tap=true;if(G.state==='play')try
 let padLostSince=0,padSlowLogged=false,padStalls=0;
 let screenFps=0,padChecked=0;
 // what the phone link looks like right now, in plain words: used on the setup screen and in the issue log
-function phoneCheck(){return (phone.via==='relay'?'relay link (slow)':'direct link')+' · network '+Math.round(phone.ms||0)+' ms · phone sends '+(phone.hz||'?')+' readings/s · gyroscope '+(phone.gyro||'?')+' · screen '+Math.round(screenFps)+' frames/s';}
+function phoneCheck(){return (phone.via==='relay'?'relay link (slow)':'direct link'+(phone.path==='direct, no re-sending'?' (no re-sending)':''))+' · network '+Math.round(phone.ms||0)+' ms · phone sends '+(phone.hz||'?')+' readings/s · gyroscope '+(phone.gyro||'?')+' · screen '+Math.round(screenFps)+' frames/s';}
 function phoneHud(now){
   if(!$('phoneSetup').hidden){
     if(phone.url&&qrFor!==phone.url){qrFor=phone.url;$('padUrl').textContent=phone.url;QRCode.toCanvas($('padQR'),phone.url,{width:360,margin:1,color:{dark:'#191d2e',light:'#fff6ea'}},err=>{if(err)logIssue('Phone glider','Could not draw the QR code: '+err.message);});}
@@ -1427,12 +1431,12 @@ function phoneHud(now){
     if(phone.status==='connected'){const ms=Math.round(phone.ms||0),relay=phone.via==='relay';
       $('padLink').textContent='Phone check: '+phoneCheck()+'. '+(relay?'Linked through the relay (slower). Put both devices on the same Wi‑Fi for the direct link.':'Linked directly.')+(ms?' Network delay about '+ms+' ms'+(ms>60?' — that is high; the same Wi‑Fi, closer to the router, helps.':', and the screen predicts past it, so the glider moves with your hand.'):'');}
   }
-  {const slow=settings.control==='phone'&&(G.state==='play'||G.state==='count')&&phone.status==='connected'&&phone.via==='relay';$('linkChip').hidden=!slow;
-   if(slow)$('linkChip').textContent='PHONE ON SLOW LINK'+(phone.ms?' · '+Math.round(phone.ms)+' MS':'')+' · SAME WI‑FI FIXES IT';}
+  {const flying=settings.control==='phone'&&(G.state==='play'||G.state==='count')&&phone.status==='connected',lost=flying&&G.bridge>0.5,slow=flying&&phone.via==='relay';$('linkChip').hidden=!(slow||lost);
+   if(lost)$('linkChip').textContent='PHONE SIGNAL DROPPED · HOLDING THE LINE';else if(slow)$('linkChip').textContent='PHONE ON SLOW LINK'+(phone.ms?' · '+Math.round(phone.ms)+' MS':'')+' · SAME WI‑FI FIXES IT';}
   // a phone check in the issue log 8 s into each flight with the phone, so a report says where any delay comes from
   if(settings.control==='phone'&&G.state==='play'&&phone.live&&padChecked>=0){if(!padChecked)padChecked=now;if(now-padChecked>8000){padChecked=-1;logIssue('Phone check',phoneCheck()+'. Slow spots: relay link, network over 40 ms, under 50 readings/s, or under 50 frames/s.');}}
   if(settings.control==='phone'&&G.state==='play'){
-    while(phone.stalls.length){const [ms,why]=phone.stalls.shift();if(G.state==='play'){recEvent('phone stall',ms+' ms: '+why);if(++padStalls<=3)logIssue('Phone glider','The phone went silent for '+(ms/1000).toFixed(1)+' s in flight: '+why+'. The glider eased level and picked your tilt up again.');}}
+    while(phone.stalls.length){const [ms,why]=phone.stalls.shift();if(G.state==='play'){recEvent('phone stall',ms+' ms: '+why);if(++padStalls<=3)logIssue('Phone glider','The phone went silent for '+(ms/1000).toFixed(1)+' s in flight: '+why+'. The glider held the line until your tilt came back.');}}
     if(phone.ms>110&&!padSlowLogged){padSlowLogged=true;logIssue('Phone glider','The phone link is slow (about '+Math.round(phone.ms)+' ms, '+(phone.via==='relay'?'through the relay':'direct')+'). Same Wi‑Fi for both devices makes it quicker.');}
     if(phone.live)padLostSince=0;else{if(!padLostSince)padLostSince=now;if(now-padLostSince>2500){pause();$('pauseNote').textContent='Paused because the phone stopped sending its tilt. Wake the phone and check it still says Connected, then resume.';}}
   }

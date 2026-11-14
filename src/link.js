@@ -3,7 +3,7 @@
 // to each other (WebRTC); a public PeerJS server is used only to introduce them.
 import { Peer } from 'peerjs';
 import { joinRelay } from './relay.js';
-import { rtcAnswer } from './rtc.js';
+import { rtcAnswer , fastChannel, chOpen } from './rtc.js';
 import { makeClock, clockPong, predict, euroStep } from './predict.js';
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -20,7 +20,7 @@ export function peerOptions() {   // ?sig=host:port points at a different introd
 export const padId = code => 'flyer-pad-' + String(code).toLowerCase();
 
 export const phone = {
-  stalls: [], hold: false,
+  stalls: [], hold: false, path: '',
   status: 'off',        // off | starting | waiting | connected | error
   error: '', code: '', url: '',
   live: false,          // tilt data is arriving right now
@@ -30,7 +30,7 @@ export const phone = {
 };
 let relay = null, relayAcked = false, dch = null, answerer = null;
 const directOpen = () => (conn && conn.open) || (dch && dch.readyState === 'open');
-function onData(d, viaRelay) {
+function onData(d, viaRelay, viaFast) {
   if (!d) return;
   if (viaRelay && d.rtc === 'offer') {   // the phone offers our own direct link through the relay
     if (answerer) answerer.close();
@@ -56,24 +56,26 @@ function onData(d, viaRelay) {
     }
     // a silence in the middle of a flight (the recordings show 1-3 s ones, twice followed by a crash): note it; the phone's
     // next health note says whether its own page or sensor paused, otherwise it was the network between the two
-    if (lastMsg && t - lastMsg > 500 && t - lastMsg < 20000) { stallMs = t - lastMsg; stallAt = t; }
+    if (lastMsg && t - lastMsg > 500 && t - lastMsg < 20000) { stallMs = t - lastMsg; stallAt = t; burstN = 0; }
+    if (stallMs && t - stallAt < 150) burstN++;   // readings that pour in right after a silence were held back, not lost
+    phone.path = viaRelay ? 'relay' : viaFast ? 'direct, no re-sending' : 'direct, re-sending';
     st.p = p; st.r = r; phone.pitch = p; phone.roll = r; lastMsg = t; phone.via = directOpen() ? 'direct' : 'relay';
   }
   // delay shown = the middle of the last five pings: one late answer is not 'a slow link'
   else if (d.q) { const now = performance.now(), rtt = now - d.q; if (rtt >= 0 && rtt < 5000) { rtts.push(rtt / 2); if (rtts.length > 5) rtts.shift(); phone.ms = [...rtts].sort((a, b) => a - b)[rtts.length >> 1]; } if (d.t != null) clockPong(clock, d.q, +d.t, now); pings++; }
   else if (d.st) { phone.hz = +d.st[0] || 0; phone.gyro = ['off', 'on', 'learning'][+d.st[1]] || 'off';
     if (stallMs && performance.now() - stallAt < 4000) { const tg = +d.st[2] || 0, sg = +d.st[3] || 0, need = stallMs * 0.5;
-      phone.stalls.push([Math.round(stallMs), d.st.length < 4 ? 'cause unknown (old phone page)' : tg > need ? 'the phone’s browser paused' : sg > need ? 'the phone’s tilt sensor paused' : 'the network between phone and screen stalled']); stallMs = 0; } }
+      phone.stalls.push([Math.round(stallMs), (d.st.length < 4 ? 'cause unknown (old phone page)' : tg > need ? 'the phone’s browser paused' : sg > need ? 'the phone’s tilt sensor paused' : 'the network between phone and screen stalled') + ' (' + phone.path + (burstN > 20 ? '; ' + burstN + ' held-back readings arrived at once' : burstN ? '; ' + burstN + ' readings in the first 0.15 s after' : '') + ')']); stallMs = 0; } }
   else if (d.h && relay) relay.send({ k: 1 });
   else if (d.b) for (const cb of boostCbs) { try { cb(); } catch (_) {} }
 }
-let stallMs = 0, stallAt = 0; const rtts = [];
+let stallMs = 0, stallAt = 0, burstN = 0, fast = null; const rtts = [];
 let peer = null, conn = null, lastMsg = 0, sp = 0, sr = 0, lastT = 0, lastPing = 0, lastPhoneT = -1e12, pings = 0;
 const st = { p: 0, r: 0, vp: 0, vr: 0, at: 0 }, clock = makeClock(), eP = {}, eR = {};
 const boostCbs = [];
 export function onPhoneBoost(cb) { boostCbs.push(cb); }
 export function setPhoneSens(v) { phone.sens = clamp(+v || 1, 0.6, 1.6); save('padSens', phone.sens); }
-function toPhone(d) { try { if (conn && conn.open) conn.send(d); else if (dch && dch.readyState === 'open') dch.send(JSON.stringify(d)); else if (relay && relayAcked) relay.send(d); } catch (_) {} }
+function toPhone(d) { try { if (chOpen(fast)) fast.send(JSON.stringify(d)); else if (conn && conn.open) conn.send(d); else if (dch && dch.readyState === 'open') dch.send(JSON.stringify(d)); else if (relay && relayAcked) relay.send(d); } catch (_) {} }
 export function phoneBuzz(pattern) { toPhone({ v: pattern }); }
 
 // the pairing code survives a reload of this tab (switching to the race canyon reloads), so a paired phone reconnects by itself
@@ -97,7 +99,7 @@ function startPeer(code) {
   peer.on('connection', c => {
     if (conn && conn.open) try { conn.close(); } catch (_) {}
     conn = c;
-    c.on('open', () => { phone.status = 'connected'; phone.via = 'direct'; pings = 0; });
+    c.on('open', () => { phone.status = 'connected'; phone.via = 'direct'; pings = 0; fast = fastChannel(c.peerConnection, d => onData(d, false, true)); });
     c.on('data', d => onData(d, false));
     c.on('close', () => { if (conn === c) { conn = null; if (phone.status === 'connected' && !relayAcked) phone.status = 'waiting'; } });
   });
@@ -115,8 +117,8 @@ export function stopPhone() { keepCode(''); if (answerer) answerer.close(); answ
 export function updatePhone(now) {
   const dt = Math.min(0.1, lastT ? (now - lastT) / 1000 : 0.016); lastT = now;
   phone.live = phone.status === 'connected' && now - lastMsg < 600;
-  // after a silence the tilt eases to level over about half a second and stays in charge (it used to snap to level in
-  // one frame and hand over to the keyboard), so a short stall is a soft sag, and the return is a soft catch-up
+  // during a silence the phone stays in charge for 3 s with its last tilt (it used to snap to level in one frame and
+  // hand over to the keyboard); the game steers along the line meanwhile and hands back softly
   phone.hold = phone.status === 'connected' && now - lastMsg < 3000;
   // ping often at first (to learn how the two clocks differ), then now and then to keep the delay figure fresh
   if (phone.status === 'connected' && now - lastPing > (pings < 8 ? 250 : phone.via === 'relay' ? 3000 : 1000)) { lastPing = now; toPhone({ p: now }); }
@@ -128,7 +130,7 @@ export function updatePhone(now) {
   const [tp, tr] = phone.live ? predict(st, now, 20 + 1000 / 60 + 1000 / 70, relay ? 260 : gy ? 160 : 90, lead) : [0, 0];
   phone.lead = phone.live ? Math.round(Math.min(relay ? 260 : 160, now - st.at + 50)) : 0;
   if (phone.live) { sp = euroStep(eP, tp, st.vp, dt); sr = euroStep(eR, tr, st.vr, dt); }   // steady when still, quick when turning
-  else { const g = 1 - Math.exp(-dt * 4); sp += (0 - sp) * g; sr += (0 - sr) * g; eP.v = sp; eR.v = sr; }   // ease to level if the messages stop
+  else if (!phone.hold) { const g = 1 - Math.exp(-dt * 4); sp += (0 - sp) * g; sr += (0 - sr) * g; eP.v = sp; eR.v = sr; }   // a silence: keep the last tilt (the game flies the line meanwhile); ease to level once it is given up
   const p = shape(sp * phone.sens, PITCH_DEAD, PITCH_FULL), t = shape(-sr * phone.sens, ROLL_DEAD, ROLL_FULL);   // t + = turn left
   phone.L = phone.hold ? clamp(p + t, -1, 1) : 0; phone.R = phone.hold ? clamp(p - t, -1, 1) : 0;
   phone.sp = sp; phone.sr = sr;

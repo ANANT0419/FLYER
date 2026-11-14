@@ -15,6 +15,23 @@ const wire = (ch, onMsg, onOpen, onClose) => {
   ch.onmessage = e => { try { onMsg(JSON.parse(e.data)); } catch (_) {} };
 };
 
+/**
+ * A second channel on a link that already exists (the PeerJS one), for the tilt itself. The PeerJS channel re-sends
+ * every lost message until it arrives; after a Wi-Fi hiccup that holds everything back for a second or more (the
+ * owner's recordings: silences of ~1.4 s, "network stalled"). This one never re-sends: a lost reading is simply
+ * replaced by the next one 16 ms later. Both sides open it with the same number, so no extra handshake is needed;
+ * if the other side is an older page it just never opens and the old channel carries on.
+ */
+export function fastChannel(pc, onMsg) {
+  try {
+    const ch = pc.createDataChannel('tilt-fast', { negotiated: true, id: 100, ordered: false, maxRetransmits: 0 });
+    ch.onmessage = e => { try { onMsg(JSON.parse(e.data)); } catch (_) {} };
+    return ch;
+  } catch (_) { return null; }
+}
+const isOpen = ch => !!ch && ch.readyState === 'open';
+export { isOpen as chOpen };
+
 /** Phone side: offer a link. send(obj) goes over the relay. Returns { answer(sdp), close() }. */
 export async function rtcOffer(send, onMsg, onOpen, onClose) {
   const pc = new RTCPeerConnection({ iceServers: ICE });
