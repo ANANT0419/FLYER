@@ -1,7 +1,7 @@
 // Flies the course with scripted pilots on each guide level, without drawing (no GPU here), and reports how the
 // guided line behaves. Needs the dev server: npx vite --port 5173. Run: node test/guide-sim.cjs [gorge|coaster|race]
 const { chromium } = require('playwright');
-const TRACK = process.argv[2] || 'gorge', RACE = TRACK === 'race';
+const TRACK = process.argv[2] || 'gorge', RACE = TRACK === 'race' || TRACK === 'sky';
 (async () => {
   const b = await chromium.launch(); const pg = await b.newPage({ viewport: { width: 320, height: 240 } });
   const errs = []; pg.on('pageerror', e => errs.push(e.message));
@@ -13,7 +13,7 @@ const TRACK = process.argv[2] || 'gorge', RACE = TRACK === 'race';
     'rough (0.4 s, 70%, shaky)': { lag: 24, gain: 0.7, noise: 0.2 },
     'sloppy (0.6 s, 50%, very shaky)': { lag: 36, gain: 0.5, noise: 0.35 },
   };
-  console.log({ gorge: 'Saffron Gorge', coaster: 'Skyline Coaster', race: 'Razorback Canyon' }[TRACK], '— up to 75 s of flying per run');
+  console.log({ gorge: 'Saffron Gorge', coaster: 'Skyline Coaster', race: 'Razorback Canyon', sky: 'Halcyon Skyway' }[TRACK], '— up to 75 s of flying per run');
   for (const lvl of ['easy', 'normal', 'pro']) for (const [name, pl] of Object.entries(pilots)) {
     const r = await pg.evaluate(([lvl, pl, RACE]) => {
       const g = window.__game, G = g.G; g.settings.guide = lvl; if (RACE) g.beginRace(true); else g.start(); G.state = 'play';

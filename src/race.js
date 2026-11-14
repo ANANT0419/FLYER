@@ -25,6 +25,8 @@ export const room = {
 
 let sb = null, ch = null, joinedAt = 0;
 const cbs = { start: [], change: [] };
+/** tag: set before joining, so each race track has its own set of rooms ('' = Razorback Canyon, as before). */
+export const raceCfg = { tag: '' };
 export function onRaceStart(cb) { cbs.start.push(cb); }
 export function onRoomChange(cb) { cbs.change.push(cb); }
 const emit = (k, ...a) => { for (const cb of cbs[k]) try { cb(...a); } catch (_) {} };
@@ -56,7 +58,7 @@ export async function joinRoom(code, name) {
   if (!raceNetReady) { room.status = 'error'; room.error = 'Race rooms are switched off in this build.'; emit('change'); return false; }
   try {
     sb = await rtClient();
-    ch = sb.channel('flyer-race-' + room.code, { config: { broadcast: { self: false, ack: false }, presence: { key: room.me.id } } });
+    ch = sb.channel('flyer-race-' + raceCfg.tag + room.code, { config: { broadcast: { self: false, ack: false }, presence: { key: room.me.id } } });
     ch.on('presence', { event: 'sync' }, () => {
       const state = ch.presenceState(), here = new Set();
       for (const id in state) { const meta = state[id][0] || {}; here.add(id); const p = player(id); p.name = String(meta.name || 'Flyer').slice(0, 16); p.t = +meta.t || Infinity; p.lvl = String(meta.lvl || ''); }
