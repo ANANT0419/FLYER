@@ -20,7 +20,7 @@ Wingsuit gliding game (three.js r128 + Vite). Live at https://flyer-aspiring-yog
 - Sun: owner said too bright (round 4). Sky sun terms, rays and glare sprite halved, bloom 0.34/threshold 0.86, and the grade softens the brightest areas (`post.js`).
 - Performance: owner saw fps drops after the terrain work. Far ranges now use per-vertex colours + Lambert (not the per-pixel terrain shader), canyon mesh 81 columns, no crack noise; quality ladder steps down at <50 fps (brushwork, resolution 1.25, 1.0, bloom, 0.8), each step noted in the issue log.
 - Phone pairing code is kept in sessionStorage, so switching to the race canyon (a page reload) keeps the phone; the phone retries by itself.
-- Racing: Razorback Canyon (`RACE` in game.js, chosen at page load; `?room=CODE` joins a room). Rooms in `src/race.js` on the Supabase project. Owner's choices: room code/link, +3 s per missed gate, a new tight canyon, racers pass through each other. Tested with two tabs against `test/fake-supabase.js`; never tested against the real Supabase service (the cloud sandbox cannot reach supabase.co).
+- Racing: Razorback Canyon (`RACE` in game.js, chosen at page load; `?room=CODE` joins a room). Rooms in `src/race.js` on the Supabase project. Owner's choices: room code/link, +3 s per missed gate, a new tight canyon, racers pass through each other. Tested with two tabs against `test/fake-supabase.js`; the owner has since raced friends on the real service and it works.
 
 ## Guided line (built; owner's choices, asked in two interactive rounds)
 Owner's words: the path was completely on the player, too hard with tricky controls; "if the player is doing right enough control, the glide is smooth and on route".
@@ -39,6 +39,10 @@ Owner's words: the path was completely on the player, too hard with tricky contr
 Run `node test/full-check.cjs` (and the other tests) after any change. Never put a `//` comment in the middle of a minified line: everything after it on that line stops running.
 
 ## Queue
-1. Owner playtest: guided line levels (feel of window/speed), phone delay with prediction, race with friends on the real service, open-palm camera mode.
+0. **Owner round 6 (do first; read the latest `flight_logs` rows, flights after id 5, before changing anything):**
+   - "It's sudden: once the player is off track and tries to go back, so many sudden moments at that time, we have to bring smoothness." The rejoin is still jerky in real play despite `test/guide-join.cjs` looking fine: find the jerky moments in the recordings (big changes in `hy`/`hp`/`lk` or in pitch/roll rate while `off` is large and the player steers back), and fix them so rejoining feels like one smooth curve.
+   - Multiplayer works with friends on the real service. The owner feels lag in multiplayer and thinks it is the scenery. Wants a **minimalistic, aesthetic, fun race track with "mind-titillating" phases** (light scenery so it runs smoothly). Ask the owner the real design choices before building (look/style, what the phases are, length).
+   - Owner's issue log that round (Mac Chrome): quality ladder still stepped twice on the first load (41 and 44 fps; now remembered); phone check direct 6 ms, 61 readings/s, gyro on, 60 fps; but later "phone link is slow (about 137 ms, direct)": a delay spike on the direct link, look for it in the recording (`ms` column).
+1. Owner playtest: guided line levels (feel of window/speed), phone delay with prediction, open-palm camera mode.
 2. A live tuning panel for camera and phone control (smoothing, dead zone, reach, curve).
 3. Visuals: trees and meadows, water, pilot. Maybe a race leaderboard that persists.
